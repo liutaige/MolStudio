@@ -1,0 +1,43 @@
+{
+  "ket": "{\n    \"ket_version\": \"2.0.0\",\n    \"root\": {\n        \"nodes\": [\n            {\n                \"$ref\": \"mol0\"\n            }\n        ],\n        \"connections\": [],\n        \"templates\": []\n    },\n    \"mol0\": {\n        \"type\": \"molecule\",\n        \"atoms\": [\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    15.199999765107028,\n                    -8.458974589703903,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    14.199999877290798,\n                    -8.458974589703903,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    13.699999933382681,\n                    -9.324999880790726,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    14.199999877290798,\n                    -10.191025291086824,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    15.199999884316304,\n                    -10.191025410296099,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    15.700000066642973,\n                    -9.325000059604639,\n                    0\n                ]\n            }\n        ],\n        \"bonds\": [\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    0,\n                    1\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    1,\n                    2\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    2,\n                    3\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    3,\n                    4\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    4,\n                    5\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    5,\n                    0\n                ]\n            }\n        ],\n        \"stereoFlagPosition\": {\n            \"x\": 15.700000066642973,\n            \"y\": 7.458974589703903,\n            \"z\": 0\n        }\n    }\n}",
+  "mol": "\n  -INDIGO-11012618032D\n\n  6  6  0  0  0  0  0  0  0  0999 V2000\n   15.2000   -8.4590    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   14.2000   -8.4590    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   13.7000   -9.3250    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   14.2000  -10.1910    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   15.2000  -10.1910    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   15.7000   -9.3250    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n  1  2  4  0  0  0  0\n  2  3  4  0  0  0  0\n  3  4  4  0  0  0  0\n  4  5  4  0  0  0  0\n  5  6  4  0  0  0  0\n  6  1  4  0  0  0  0\nM  END\n",
+  "smiles": "c1ccccc1",
+  "atoms": [
+    {
+      "id": 0,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 1,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 2,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 3,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 4,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 5,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    }
+  ]
+}

@@ -1,0 +1,435 @@
+[
+ {
+  "id": "F01",
+  "file": "F01.molwork",
+  "note": "OH⁻ + CH₃Br：孤对→待成键、C—Br σ→Br",
+  "ops": [
+   "setMolecule('[OH-].CBr')",
+   "在 O 上加一对孤对（angle 0）",
+   "两电子箭头：O 的孤对 → formingBond(O,C)",
+   "两电子箭头：C—Br 的 σ → Br 原子"
+  ],
+  "molecules": [
+   "mol0",
+   "mol1"
+  ],
+  "atoms": 3,
+  "bonds": 1,
+  "lonePairs": 1,
+  "arrows": 2,
+  "arrowDetail": [
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "bond/sigma",
+    "t": "atom"
+   }
+  ]
+ },
+ {
+  "id": "F02",
+  "file": "F02.molwork",
+  "note": "羰基 π 来源的两根箭头（不同弯向）",
+  "ops": [
+   "setMolecule('C=O')",
+   "两电子箭头：C=O 的 π → O（bend 0.3）",
+   "两电子箭头：C=O 的 π → C（bend -0.3）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 2,
+  "bonds": 1,
+  "lonePairs": 0,
+  "arrows": 2,
+  "arrowDetail": [
+   {
+    "e": 2,
+    "s": "bond/pi",
+    "t": "atom"
+   },
+   {
+    "e": 2,
+    "s": "bond/pi",
+    "t": "atom"
+   }
+  ]
+ },
+ {
+  "id": "F03",
+  "file": "F03.molwork",
+  "note": "两个自由基的鱼钩箭头指向同一个待成键",
+  "ops": [
+   "setMolecule('[CH3].[CH3]')",
+   "单电子箭头：C1 自由基 → formingBond(C1,C2)",
+   "单电子箭头：C2 自由基 → formingBond(C1,C2)（同一对原子）"
+  ],
+  "molecules": [
+   "mol0",
+   "mol1"
+  ],
+  "atoms": 2,
+  "bonds": 0,
+  "lonePairs": 0,
+  "arrows": 2,
+  "arrowDetail": [
+   {
+    "e": 1,
+    "s": "radical",
+    "t": "formingBond"
+   },
+   {
+    "e": 1,
+    "s": "radical",
+    "t": "formingBond"
+   }
+  ]
+ },
+ {
+  "id": "F04-water-implicit",
+  "file": "F04-water-implicit.molwork",
+  "note": "水中性 O（O）孤对建议 2 对",
+  "ops": [
+   "setMolecule(\"O\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 1,
+  "bonds": 0,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F04-water-explicit",
+  "file": "F04-water-explicit.molwork",
+  "note": "水（显式氢）（[H]O[H]）孤对建议 2 对",
+  "ops": [
+   "setMolecule(\"[H]O[H]\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 3,
+  "bonds": 2,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F04-hydroxide",
+  "file": "F04-hydroxide.molwork",
+  "note": "OH⁻（[OH-]）孤对建议 3 对",
+  "ops": [
+   "setMolecule(\"[OH-]\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 1,
+  "bonds": 0,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F04-hydronium",
+  "file": "F04-hydronium.molwork",
+  "note": "H₃O⁺（[OH3+]）孤对建议 1 对",
+  "ops": [
+   "setMolecule(\"[OH3+]\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 1,
+  "bonds": 0,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F04-ammonia",
+  "file": "F04-ammonia.molwork",
+  "note": "氨（N）孤对建议 1 对",
+  "ops": [
+   "setMolecule(\"N\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 1,
+  "bonds": 0,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F04-ammonium",
+  "file": "F04-ammonium.molwork",
+  "note": "铵（[NH4+]）孤对建议 0 对",
+  "ops": [
+   "setMolecule(\"[NH4+]\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 1,
+  "bonds": 0,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F04-chloromethane",
+  "file": "F04-chloromethane.molwork",
+  "note": "氯甲烷的 Cl（CCl）孤对建议 3 对",
+  "ops": [
+   "setMolecule(\"CCl\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 2,
+  "bonds": 1,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F04-chloride",
+  "file": "F04-chloride.molwork",
+  "note": "氯离子（[Cl-]）孤对建议 4 对",
+  "ops": [
+   "setMolecule(\"[Cl-]\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 1,
+  "bonds": 0,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F04-carbonyl",
+  "file": "F04-carbonyl.molwork",
+  "note": "羰基氧（CC=O）孤对建议 2 对",
+  "ops": [
+   "setMolecule(\"CC=O\")",
+   "不添加任何机理对象（只验证建议）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 3,
+  "bonds": 2,
+  "lonePairs": 0,
+  "arrows": 0,
+  "arrowDetail": []
+ },
+ {
+  "id": "F05",
+  "file": "F05.molwork",
+  "note": "两个相同乙醇相邻，箭头只绑左侧那个（防串绑）",
+  "ops": [
+   "setMolecule('CCO.CCO')",
+   "在左侧乙醇的 O 上加孤对并画箭头到同一分子的 C",
+   "用于验证移动/交换位置后不按最近原子重接"
+  ],
+  "molecules": [
+   "mol0",
+   "mol1"
+  ],
+  "atoms": 6,
+  "bonds": 4,
+  "lonePairs": 1,
+  "arrows": 1,
+  "arrowDetail": [
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   }
+  ]
+ },
+ {
+  "id": "F06",
+  "file": "F06.molwork",
+  "note": "既有立体夹具 M11（OR 组）+ 机理层：信息保持",
+  "ops": [
+   "setMolecule(fixtures/M11.ket 原文)",
+   "在 O 上加孤对并画两根箭头",
+   "用于验证立体/未知/组信息不被机理层改动"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 6,
+  "bonds": 5,
+  "lonePairs": 1,
+  "arrows": 2,
+  "arrowDetail": [
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "atom"
+   },
+   {
+    "e": 2,
+    "s": "bond/sigma",
+    "t": "atom"
+   }
+  ]
+ },
+ {
+  "id": "F08",
+  "file": "F08.molwork",
+  "note": "200 原子 + 30 孤对 + 20 箭头（规模/性能）",
+  "ops": [
+   "setMolecule(200 个 C 的直链)",
+   "程序化加 30 对孤对 + 20 根箭头（走同一条提交路径）"
+  ],
+  "molecules": [
+   "mol0"
+  ],
+  "atoms": 200,
+  "bonds": 199,
+  "lonePairs": 30,
+  "arrows": 20,
+  "arrowDetail": [
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   },
+   {
+    "e": 2,
+    "s": "lonePair",
+    "t": "formingBond"
+   }
+  ]
+ },
+ {
+  "id": "F09",
+  "note": "坏文件：重复 ID / 更高版本 / 缺 bindings / 非有限数值 / 合法悬空引用",
+  "files": [
+   "F09-duplicate-id.molwork",
+   "F09-newer-version.molwork",
+   "F09-missing-bindings.molwork",
+   "F09-nonfinite.molwork",
+   "F09-dangling-ok.molwork"
+  ],
+  "expect": {
+   "F09-duplicate-id": "reject",
+   "F09-newer-version": "reject",
+   "F09-missing-bindings": "reject",
+   "F09-nonfinite": "reject",
+   "F09-dangling-ok": "load with stale refs"
+  }
+ }
+]

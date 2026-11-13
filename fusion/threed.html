@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>3D</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fafafa; }
+  #v { width: 100%; height: 100%; }
+  #geometry-note { position: absolute; top: 10px; left: 10px; right: 10px;
+    width: fit-content; max-width: calc(100% - 40px); padding: 7px 10px;
+    border: 1px solid #dbe2e8; border-radius: 6px; background: rgba(255,255,255,.94);
+    color: #465462; font: 12px/1.5 -apple-system, sans-serif; pointer-events: none; }
+  #geometry-note[hidden] { display: none; }
+</style>
+<script src="/vendor/ngl.js"></script>
+</head>
+<body>
+<div id="v"></div>
+<div id="geometry-note" role="note" hidden></div>
+<script>
+/* 3D 渲染：NGL（MIT，RCSB 官方在用）
+   手势全部在页面内处理 —— 不再走 Swift→JS 的 IPC，这是之前卡顿的根因 */
+const stage = new NGL.Stage("v", {
+  backgroundColor: "#fafafa",
+  tooltip: false,
+  impostor: true,        // 实例化渲染，球/棍都是 impostor，非常快
+  quality: "medium"
+});
+stage.setParameters({ clipNear: 0 });
+
+/* 无头验证/调参钩子（正常从 app 启动无 query，走默认参数）：
+   ?noimp → 关 impostor 改用真实网格几何（软件渲染下 impostor 有伪影，截图不可信）
+   ?p={"radiusScale":0.2,...} → 覆盖球棍参数，用于调参 */
+const QS = new URLSearchParams(location.search);
+const TUNE = (() => { try { return JSON.parse(QS.get("p") || "{}"); } catch (e) { return {}; } })();
+if (QS.has("noimp")) stage.setParameters({ impostor: false });
+
+let showSeq = 0;
+let comp = null;
+
+/* 用 NGL 自己的相机控制（与它内置 panDrag/zoomScroll 同一套 API） */
+function pan(dx, dy) { try { stage.trackballControls.pan(dx, dy); } catch (e) {} }
+function zoomFactor(f) {
+  // 用绝对距离缩放，避免 trackballControls.zoom(delta) 的语义歧义
+  try {
+    const vc = stage.viewerControls;
+    const cur = vc.getCameraDistance();
+    vc.distance(Math.max(0.5, Math.min(500, cur / f)));
+  } catch (e) {}
+}
+function spinZ(deg) { try { stage.viewerControls.spin([0, 0, 1], deg * Math.PI / 180); } catch (e) {} }
+
+const STYLE_MAP = {
+  ballstick: "ball+stick",
+  stick: "licorice",
+  line: "line",
+  sphere: "spacefill"
+};
+
+window.k3d = {
+  show: (block, style) => {
+    const seq = ++showSeq;
+    const title = block.split(/\r?\n/, 1)[0];
+    const geometryNote = document.getElementById('geometry-note');
+    geometryNote.hidden = !title.startsWith('MolStudio 参考几何：');
+    geometryNote.textContent = geometryNote.hidden ? '' : title.slice('MolStudio 参考几何：'.length);
+    if (!geometryNote.hidden && title.includes('XeF6')) geometryNote.textContent += '；高对称参考模型，实际构型可畸变';
+    if (style) window.__lastStyle = STYLE_MAP[style] ? style : "ballstick";  // 显式样式参数即时更新期望值
+    stage.removeAllComponents();
+    comp = null;                    // load 期间 style() 不再往游离组件上加表示
+    const blob = new Blob([block], { type: "text/plain" });
+    stage.loadFile(blob, { ext: "sdf" }).then(c => {
+      if (seq !== showSeq) return;  // 已有更新的 show，丢弃本次 load
+      comp = c;
+      window.k3d.style(window.__lastStyle || "ballstick");  // 加载完成时读取最新期望样式，不用闭包捕获的旧选择
+      stage.autoView();
+      stage.handleResize();
+    }).catch(e => {
+      if (seq !== showSeq) return;
+      window.__loadError = String((e && e.message) || e);  // molblock 非法不再静默白屏
+      console.error("k3d loadFile failed:", e);
+    });
+  },
+  style: s => {
+    window.__lastStyle = s;
+    if (!comp) return;
+    comp.removeAllRepresentations();
+    // 注意：先归一化到 STYLE_MAP 的键名再分支 —— 之前拿映射后的 NGL 类型名
+    // 去和键名比较，"stick" 分支永远不成立，棍状模型一直错误渲染成填充模型
+    const key = STYLE_MAP[s] ? s : "ballstick";
+    const NOIMP = QS.has("noimp");
+    if (key === "ballstick") {
+      // 真·球棍（NGL 源码语义）：原子半径 = 元素vdW × radiusScale × aspectRatio，
+      // 键半径 = 基径 × radiusScale（不乘 aspectRatio）→ F < Cl < Br < I 球径天然可辨；
+      // multipleBond symmetric → 双键渲染为对称双棍（bondScale 每根粗细占比，bondSpacing 间距）
+      comp.addRepresentation("ball+stick", Object.assign({
+        colorScheme: "element",
+        radiusType: "vdw",       // 球基径 = 元素 vdW（radiusSize 只对 radiusType:"size" 生效，勿混用）
+        radiusScale: 0.104,      // C 球 = 1.7×0.104×2.75 ≈ 0.49 Å（球不变），键棍 ≈ 0.18 Å（再细 20%）
+        aspectRatio: 2.75,       // 球/棍半径比 ↑ = 棍相对更细（用户第二次要求细化）
+        multipleBond: "symmetric",
+        bondScale: 0.4,
+        bondSpacing: 1,
+        sphereDetail: 2,
+        disableImpostor: NOIMP
+      }, TUNE));
+    } else if (key === "stick") {
+      // 棍状：licorice = ball+stick aspectRatio 强制 1，radiusType size → 均匀细棍+细球节点
+      comp.addRepresentation("licorice", Object.assign({
+        colorScheme: "element",
+        radiusType: "size",
+        radiusSize: 0.14,
+        multipleBond: "symmetric",
+        bondScale: 0.4,
+        bondSpacing: 1,
+        disableImpostor: NOIMP
+      }, TUNE));
+    } else if (key === "line") {
+      comp.addRepresentation("line", { colorScheme: "element", multipleBond: "symmetric" });
+    } else {
+      // 填充模型：默认即全尺寸 vdW CPK
+      comp.addRepresentation("spacefill", Object.assign({
+        colorScheme: "element", radiusType: "vdw", radiusScale: 1.0, disableImpostor: NOIMP
+      }, TUNE));
+    }
+    window.__reps = key + "→" + STYLE_MAP[key];
+    stage.viewer.requestRender();
+  },
+  pan: (dx, dy) => pan(-dx, -dy),
+  zoomBy: f => zoomFactor(f),
+  rotateBy: deg => spinZ(deg),
+  rotateXY: (dx, dy) => {
+    // 该构建 viewerControls.rotate(q) 是绝对设姿（不与当前姿态复合，第二次直接覆盖第一次），
+    // 必须用增量 API spin(axis, angle)（= rotateOnAxis，NGL 动画控制器同款）
+    try {
+      stage.viewerControls.spin([0, 1, 0], dx * 0.008);
+      stage.viewerControls.spin([1, 0, 0], dy * 0.008);
+    } catch (e) {}
+  },
+  spin: on => { try { stage.setSpin(!!on); } catch (e) {} },  // 该构建 setSpin 只收单布尔，多余参数被忽略
+  reset: () => { stage.autoView(); }
+};
+
+/* 手势：全部交给 NGL 内置鼠标控制（拖拽旋转 / 滚轮缩放 / 右键拖拽平移） */
+/* 调试：统计真实拖拽到达页面的增量 */
+window.__dbg = { down: 0, move: 0, dx: 0, dy: 0, lastX: null, lastY: null };
+document.addEventListener("mousedown", e => { window.__dbg.down++; window.__dbg.lastX = e.clientX; window.__dbg.lastY = e.clientY; }, true);
+document.addEventListener("mousemove", e => {
+  const d = window.__dbg;
+  d.move++;
+  if (d.lastX !== null) { d.dx += e.clientX - d.lastX; d.dy += e.clientY - d.lastY; }
+  d.lastX = e.clientX; d.lastY = e.clientY;
+}, true);
+document.addEventListener("mouseup", () => { window.__dbg.lastX = null; window.__dbg.lastY = null; }, true);
+
+/* 双指滑动 = 平移（用 NGL 自己的 pan）；捏合/ctrl+滚轮 = 缩放 */
+/* 移除 NGL 内置滚轮绑定：普通滚轮缩放 + shift/ctrl 修饰键路径
+   （scroll-shift→focusScroll 会动裁剪焦点把分子"切"出断层、scroll-ctrl→isolevelScroll 等） */
+["scroll", "scroll-shift", "scroll-ctrl", "scroll-shift-ctrl"].forEach(t => {
+  try { stage.mouseControls.remove(t); } catch (e) {}
+});
+const viewport = document.getElementById("v");
+viewport.addEventListener("wheel", e => {
+  e.preventDefault();
+  const k = e.deltaMode === 1 ? 16 : 1;
+  if (e.ctrlKey) {
+    zoomFactor(Math.exp(-(e.deltaY * k) * 0.0025));
+  } else {
+    pan(e.deltaX * k, e.deltaY * k);      // 方向：内容跟手（上下左右已翻正）
+  }
+}, { passive: false, capture: true });
+
+window.addEventListener("resize", () => stage.handleResize());
+new ResizeObserver(() => {
+  stage.handleResize();
+}).observe(document.getElementById("v"));
+</script>
+</body>
+</html>

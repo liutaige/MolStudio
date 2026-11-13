@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>MolStudio 帮助</title>
+<style>
+  :root {
+    --ink: #1c1c1e; --muted: #6b7280; --line: #e3e5e8;
+    --bg: #f6f7f9; --card: #ffffff; --accent: #2f6fed; --accent-soft: #f0f5ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.7 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  #top { position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; gap: 10px;
+    padding: 14px 26px 12px; background: rgba(246, 247, 249, .96);
+    border-bottom: 1px solid var(--line); backdrop-filter: saturate(180%) blur(12px); }
+  #top h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .2px; }
+  #top .sub { color: var(--muted); font-size: 12px; }
+  #toc { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 26px 0; }
+  #toc a { display: inline-block; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--card); color: #3a3a3c; text-decoration: none; font-size: 12px; }
+  #toc a:hover { border-color: var(--accent); color: var(--accent); }
+  main { max-width: 760px; padding: 8px 26px 40px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 20px 14px; margin: 14px 0; }
+  section h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+  section h3 { margin: 14px 0 4px; font-size: 12.5px; font-weight: 600; color: #3a3a3c; }
+  p { margin: 6px 0; }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    background: #f2f4f7; border: 1px solid #e8ebef; border-radius: 4px; padding: 0 4px; }
+  .k { display: inline-block; min-width: 18px; text-align: center; padding: 0 5px;
+    border: 1px solid #d5d9df; border-bottom-width: 2px; border-radius: 5px;
+    background: #fff; font-size: 11.5px; color: #3a3a3c; }
+  .note { color: var(--muted); font-size: 12px; }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 8px 8px 0; padding: 9px 12px; margin: 10px 0 4px; }
+  .callout strong { font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 4px; table-layout: fixed; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid #eef0f3; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  th:first-child, td:first-child { width: 86px; white-space: nowrap; }
+  th:last-child, td:last-child { width: 172px; white-space: nowrap; }
+  button { border: 1px solid #b9cffa; background: var(--accent-soft); color: #2b5bd7;
+    border-radius: 7px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; }
+  button:hover { background: #e2ecff; }
+  footer { color: var(--muted); font-size: 11.5px; padding: 0 26px 26px; }
+</style>
+</head>
+<body>
+<header id="top">
+  <h1>MolStudio 帮助</h1>
+  <span class="sub">本地帮助 · 不联网</span>
+</header>
+
+<nav id="toc">
+  <a href="#canvas">结构画布</a>
+  <a href="#mech">机理工具</a>
+  <a href="#three-d">3D 与示例构型</a>
+  <a href="#files">文件在哪</a>
+  <a href="#example">示例</a>
+</nav>
+
+<main>
+<section id="canvas">
+  <h2>结构与机理共用一张画布</h2>
+  <p>在同一画布绘制分子、孤对电子和电子流箭头，检查或整理结构、计算性质，并生成独立的 3D 预览窗口。</p>
+  <p>右下角的 <strong>AI</strong> 按钮打开助手。可以讨论化学问题，也可以让助手绘制或编辑当前画布。模型设置、停止和继续执行都在助手侧栏中。</p>
+  <p class="note">完整机理请保存为 .molwork，保留结构、孤对、电子流与语义绑定；.ket / .mol / .sdf / .smi 用于结构交换。</p>
+</section>
+
+<section id="mech">
+  <h2>机理工具怎么用</h2>
+  <p>机理工具在结构画布左侧工具栏里，和 Ketcher 原生工具排在一起。</p>
+  <ul>
+    <li><strong>孤对电子</strong>：选工具后点原子，给这个原子加一对孤对。已存在的孤对再点一次是选中它。</li>
+    <li><strong>两电子弯箭头（Curly）</strong>：从电子来源拖到目标；也可以先点来源、再点目标。来源可以是孤对、键（σ/π）或带电荷的原子。</li>
+    <li><strong>单电子鱼钩</strong>：画自由基的单电子转移，操作与弯箭头相同。</li>
+    <li><strong>属性条</strong>：选中箭头后，画布底部出现属性条，可切换双键来源的 σ/π、拖曲率手柄或滑杆、重新排布、删除。</li>
+    <li><strong>显示/隐藏建议孤对</strong>：左侧眼睛按钮只控制显示，不写入文件、不进历史。</li>
+  </ul>
+  <div class="callout">
+    <strong>点不动的时候看这里：</strong>缩写里的隐式氢（例如 <span class="mono">OH</span> 的 H）是保护区，点在 H 上不会起笔，
+    状态栏会提示先用顶部「Add/Remove explicit hydrogens（加/去显式氢）」展开。点原子本身的元素符号即可。
+  </div>
+  <p class="note">Esc 取消正在画的箭头；<span class="k">⌘Z</span> / <span class="k">⇧⌘Z</span> 撤销重做。机理对象和结构改动共用同一条历史。</p>
+</section>
+
+<section id="three-d">
+  <h2>3D 生成与「示例构型」</h2>
+  <p>「结构 &gt; 生成 3D 预览」<span class="k">⇧⌘D</span> 会把当前结构送到本地 RDKit：加氢、ETKDG 生成构象、力场优化，然后在 3D 预览窗口显示。窗口里可切换球棍 / 棍 / 线 / 空间填充，也可开自转。</p>
+  <h3>什么时候会问「查看一个示例」</h3>
+  <p>如果结构里有<strong>尚未确定</strong>的立体信息（未指定的四面体中心、未指定的双键构型、相对构型或混合物组），
+     生成前会先询问：</p>
+  <ul>
+    <li><strong>返回画布</strong>（默认，回车/Esc）：先去把构型画明确，再生成。</li>
+    <li><strong>查看一个示例</strong>：按现有画法生成其中一种可能的三维结构。</li>
+  </ul>
+  <div class="callout">
+    <strong>示例构型是什么意思：</strong>它只是「一种可能的结果」，不代表原图已经确定了构型，也不会改写画布上的立体信息。
+    3D 窗口会带「示例构型 · 原图未指定立体」的标识；多分子时还会注明哪几个分子是示例。
+  </div>
+  <p class="note">力场未收敛时窗口会单独给出警告，与示例标识互不覆盖。「结构 &gt; 计算性质」<span class="k">⇧⌘P</span> 打开分析窗口。</p>
+</section>
+
+<section id="files">
+  <h2>文件存在哪</h2>
+  <p>保存和打开默认都在这个目录（欢迎页的「最近文件」列的就是这里）：</p>
+  <p><span class="mono">~/Library/Application Support/Ketcher3D/</span></p>
+  <p class="note">目录名沿用早期版本，改名会找不到已有文件，所以保持不变。</p>
+  <table>
+    <tr><th>扩展名</th><th>内容</th></tr>
+    <tr><td><span class="mono">.ket</span> <span class="mono">.mol</span> <span class="mono">.sdf</span> <span class="mono">.cdxml</span> <span class="mono">.smi</span></td><td>结构文件（结构画布）</td></tr>
+    <tr><td><span class="mono">.molwork</span></td><td>结构画布工作台快照：结构 + 孤对 + 箭头 + 绑定</td></tr>
+  </table>
+  <p class="note">导出：文件 &gt; 导出 MOL…、复制 SMILES、导出机理图…（SVG/PNG）。</p>
+</section>
+
+<section id="example">
+  <h2>示例</h2>
+  <p>欢迎页的「打开示例」会载入 <strong>OH⁻ + CH₃Br 的 Sₙ2 机理</strong>：1 对孤对、2 根两电子弯箭头（O 的孤对 → 待成键 O···C；C—Br 的 σ → Br）。</p>
+  <p class="note">这份示例来自仓库里已验收的机理夹具 F01（tests/fixtures/workbench-mechanism/F01.molwork），不是临时编的演示数据。</p>
+  <p id="example-action"><button type="button" id="btnExample">打开这个示例</button></p>
+  <p class="note" id="example-fallback" hidden>浏览器预览里没有原生文件桥；请在 MolStudio 应用内从欢迎页打开示例。</p>
+</section>
+</main>
+
+<footer>MolStudio · 帮助内容与当前版本行为一致；如与界面不符，以界面为准。</footer>
+
+<script>
+(function () {
+  const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.k3d;
+  const btn = document.getElementById('btnExample');
+  const fallback = document.getElementById('example-fallback');
+  if (bridge) {
+    btn.addEventListener('click', function () {
+      bridge.postMessage({ act: 'openExample' });
+    });
+  } else {
+    // 没有原生桥时不摆一个点了没反应的按钮
+    document.getElementById('example-action').hidden = true;
+    fallback.hidden = false;
+  }
+})();
+</script>
+</body>
+</html>

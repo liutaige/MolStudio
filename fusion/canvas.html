@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>Canvas</title>
+<link rel="stylesheet" href="agent/panel.css" />
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; }
+  iframe { width: 100%; height: 100%; border: 0; display: block; }
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+    max-width: 70%; padding: 9px 14px; border-radius: 8px;
+    background: rgba(28, 28, 30, .92); color: #fff;
+    font: 13px/1.5 -apple-system, "PingFang SC", system-ui, sans-serif;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .22);
+    opacity: 0; transition: opacity .18s ease; pointer-events: none; z-index: 9;
+  }
+  #toast.show { opacity: 1; }
+  /* 页内帮助入口：右下角轻量按钮，避开底部居中的机理属性条 */
+  #helpBtn {
+    position: fixed; right: 16px; bottom: 64px; z-index: 24;
+    display: flex; align-items: center; gap: 5px;
+    height: 30px; padding: 0 11px; border-radius: 15px;
+    border: 1px solid rgba(0, 0, 0, .12); background: rgba(255, 255, 255, .96);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .10);
+    font: 12px/1 -apple-system, "PingFang SC", system-ui, sans-serif; color: #3a3a3c;
+    cursor: pointer; user-select: none;
+  }
+  #helpBtn:hover { background: #f2f7fa; border-color: #0a7ea4; color: #0a7ea4; }
+  #helpBtn:focus-visible { outline: 2px solid #0a7ea4; outline-offset: 2px; }
+</style>
+</head>
+<body>
+<iframe id="k" src="/ketcher/index.html"></iframe>
+<div id="toast"></div>
+<button id="helpBtn" type="button" title="打开帮助" aria-label="打开帮助">
+  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+    <circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.3"/>
+    <path d="M6.1 6.2c.1-1 .9-1.7 1.9-1.7 1.1 0 1.9.7 1.9 1.7 0 .9-.5 1.3-1.2 1.8-.5.3-.7.6-.7 1.1v.3"
+          fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+    <circle cx="8" cy="11.6" r=".8" fill="currentColor"/>
+  </svg>
+  <span>帮助</span>
+</button>
+<script src="workbench/canvas-viewport.js"></script>
+<script>
+const kd = document.getElementById('k');
+
+let panX = 0, panY = 0;
+window.k3dProbe = { zoomCalls: 0, lastFactor: 0 };
+function kdDoc() { try { return kd.contentDocument; } catch (e) { return null; } }
+function applyPan() {
+  // 直接平移 iframe 元素：不依赖 Ketcher 内部结构，命中测试也跟着走
+  kd.style.transform = `translate(${panX}px, ${panY}px)`;
+}
+function ketcher() { try { return kd.contentWindow.ketcher; } catch (e) { return null; } }
+function editor() { const k = ketcher(); return k ? k.editor : null; }
+const viewport = MolCanvasViewport.create(kd, editor);
+function bridge() {
+  return (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.k3d)
+    ? window.webkit.messageHandlers.k3d : null;
+}
+function notifyNative(msg) { const b = bridge(); if (b) { try { b.postMessage(msg); } catch (e) {} } }
+
+/* 页内帮助入口：原生里由 AppDelegate 打开 help.html 窗口；浏览器里直接开帮助页 */
+document.getElementById('helpBtn').addEventListener('click', () => {
+  const b = bridge();
+  if (b) { try { b.postMessage({ act: 'help' }); return; } catch (e) {} }
+  window.open('/help.html', '_blank', 'noopener');
+});
+
+let toastTimer = null;
+function toast(text) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+/* ---------------- 通用小工具 ---------------- */
+function coordKey(x, y) {
+  const component = n => { const s = (+n).toFixed(6); return s === '-0.000000' ? '0.000000' : s; };
+  return component(x) + ',' + component(y);
+}
+
+/* 机理层（workbench/）选中的对象数：由 main.js 的控制器写入。
+   只选中箭头/孤对时，整理与 3D 必须提示"请选择分子"，不能当成空选区操作整张画布。 */
+function mechSelectionCount() { return typeof window.__mechSelectionCount === 'number' ? window.__mechSelectionCount : 0; }
+
+/* 文档身份：KET 文本的稳定指纹，用于异步结果失效检查 */
+function identityOf(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(16) + ':' + text.length;
+}
+
+/* 选区序列化里带 id 的键（其余键如 enhancedFlags 不是对象 id） */
+const SEL_ID_KEYS = ['atoms', 'bonds', 'rxnArrows', 'rxnPluses', 'rgroups', 'sgroups',
+  'sgroupData', 'simpleObjects', 'texts', 'images', 'multitailArrows'];
+
+function selectionParts() {
+  const ed = editor();
+  const empty = { atoms: [], bonds: [], others: 0, any: false };
+  if (!ed) return empty;
+  let sel = null;
+  try { sel = ed.selection(); } catch (e) { sel = null; }
+  if (!sel || typeof sel !== 'object') return empty;
+  const atoms = Array.isArray(sel.atoms) ? sel.atoms.slice() : [];
+  const bonds = Array.isArray(sel.bonds) ? sel.bonds.slice() : [];
+  let others = 0;
+  for (const key of Object.keys(sel)) {
+    if (key === 'atoms' || key === 'bonds' || key === 'enhancedFlags') continue;
+    const v = sel[key];
+    if (Array.isArray(v) && v.length) others += v.length;
+  }
+  return { atoms, bonds, others, any: atoms.length > 0 || bonds.length > 0 || others > 0 };
+}
+
+/* 选区涉及的原子 id（含选中键的两个端点） */
+function selectedAtomIds(parts) {
+  const ed = editor(); const st = ed && ed.struct();
+  const ids = new Set(parts.atoms);
+  if (st && parts.bonds.length) {
+    for (const bid of parts.bonds) {
+      const b = st.bonds.get(bid);
+      if (b) { ids.add(b.begin); ids.add(b.end); }
+    }
+  }
+  return Array.from(ids).filter(id => st && st.atoms.get(id));
+}
+
+/* 选中原子的化学坐标（KET 坐标系：x 同号、y 取反） */
+function selectionPoints(parts) {
+  const ed = editor(); const st = ed && ed.struct();
+  if (!st) return [];
+  const pts = [];
+  for (const id of selectedAtomIds(parts)) {
+    const a = st.atoms.get(id);
+    if (a && a.pp) pts.push([a.pp.x, -a.pp.y]);
+  }
+  return pts;
+}
+
+/* KET 分子顺序（root.nodes 顺序 = 画布顺序） */
+function orderedMoleculeKeys(doc) {
+  const out = [];
+  const nodes = (doc.root && doc.root.nodes) || [];
+  for (const n of nodes) {
+    if (!n || typeof n !== 'object') continue;
+    const ref = n.$ref;
+    if (ref && doc[ref] && doc[ref].type === 'molecule') out.push(ref);
+  }
+  if (!out.length) {
+    for (const key of Object.keys(doc)) {
+      if (doc[key] && doc[key].type === 'molecule') out.push(key);
+    }
+  }
+  return out;
+}
+
+/* KET 坐标 → 命中哪个分子（与后端 _targets_by_points 同一套规则） */
+function touchedKeys(doc, keys, points, tol) {
+  const t = tol || 1e-3;
+  const hit = [];
+  for (const key of keys) {
+    const sec = doc[key] || {};
+    let matched = false;
+    for (const a of sec.atoms || []) {
+      const loc = a.location || [0, 0, 0];
+      for (const p of points) {
+        if (Math.abs(loc[0] - p[0]) <= t && Math.abs(loc[1] - p[1]) <= t) { matched = true; break; }
+      }
+      if (matched) break;
+    }
+    if (matched) hit.push(key);
+  }
+  return hit;
+}
+
+/* ---------------- 整理（Layout / Clean Up / 原生菜单 共用） ---------------- */
+/* KET 原子 → 编辑器原子 id 的显式映射（按坐标精确匹配 + 双射校验，不做最近邻猜测） */
+function buildAtomMap(doc, st) {
+  const byCoord = new Map();
+  for (const [id, a] of Array.from(st.atoms.entries())) {
+    if (!a || !a.pp) return { error: '画布原子缺少坐标，无法整理' };
+    const key = coordKey(a.pp.x, -a.pp.y);
+    if (byCoord.has(key)) return { error: '画布上有重合的原子，无法建立对应关系' };
+    byCoord.set(key, id);
+  }
+  const map = {};
+  const used = new Set();
+  for (const key of orderedMoleculeKeys(doc)) {
+    const sec = doc[key];
+    const ids = [];
+    for (const at of sec.atoms || []) {
+      const loc = at.location || [0, 0, 0];
+      const id = byCoord.get(coordKey(loc[0], loc[1]));
+      if (id === undefined) return { error: '无法建立画布与计算数据的对应关系（原子坐标不匹配）' };
+      if (used.has(id)) return { error: '原子映射重复，已取消整理' };
+      used.add(id);
+      ids.push(id);
+    }
+    map[key] = ids;
+  }
+  if (used.size !== st.atoms.size) return { error: '画布上有未包含在导出数据里的原子，已取消整理' };
+  return { map };
+}
+
+function bondIndexOf(st) {
+  const idx = new Map();
+  for (const [id, b] of Array.from(st.bonds.entries())) {
+    const key = Math.min(b.begin, b.end) + ':' + Math.max(b.begin, b.end);
+    idx.set(key, { id, bond: b });
+  }
+  return idx;
+}
+
+/* 快照：原子坐标 + 键方向/楔键。perform 时按 id 复原，保证撤销/重做稳定。 */
+function captureState(st, map, molecules) {
+  const atoms = [];
+  const bonds = [];
+  const seenAtom = new Set();
+  const seenBond = new Set();
+  const bidx = bondIndexOf(st);
+  for (const m of molecules) {
+    const ids = map[m.key];
+    if (!ids) continue;
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      if (seenAtom.has(id)) continue;
+      seenAtom.add(id);
+      const a = st.atoms.get(id);
+      if (a && a.pp) atoms.push([id, a.pp.x, a.pp.y]);
+    }
+    for (const b of m.bonds || []) {
+      const i1 = ids[b.i], i2 = ids[b.j];
+      if (i1 === undefined || i2 === undefined) continue;
+      const found = bidx.get(Math.min(i1, i2) + ':' + Math.max(i1, i2));
+      if (!found || seenBond.has(found.id)) continue;
+      seenBond.add(found.id);
+      bonds.push([found.id, found.bond.begin, found.bond.end, found.bond.stereo || 0,
+                  found.bond.hb1, found.bond.hb2]);
+    }
+  }
+  return { atoms, bonds };
+}
+
+function applyState(struct, snap) {
+  for (const [id, x, y] of snap.atoms) {
+    const a = struct.atoms.get(id);
+    if (a && a.pp) { a.pp.x = x; a.pp.y = y; }
+  }
+  for (const [bid, begin, end, stereo, hb1, hb2] of snap.bonds) {
+    const b = struct.bonds.get(bid);
+    if (!b) continue;
+    b.begin = begin; b.end = end;
+    b.stereo = stereo;
+    if (hb1 !== undefined) b.hb1 = hb1;
+    if (hb2 !== undefined) b.hb2 = hb2;
+  }
+}
+
+/* 写入新坐标与新楔键（只动目标分子；其余对象原样保留） */
+function applyLayout(st, map, molecules) {
+  const bidx = bondIndexOf(st);
+  const flipped = [];
+  for (const m of molecules) {
+    const ids = map[m.key];
+    if (!ids) continue;
+    for (let i = 0; i < m.atoms.length; i++) {
+      const a = st.atoms.get(ids[i]);
+      if (!a || !a.pp) continue;
+      a.pp.x = m.atoms[i][0];
+      a.pp.y = -m.atoms[i][1];
+    }
+    for (const b of m.bonds || []) {
+      const i1 = ids[b.i], i2 = ids[b.j];
+      if (i1 === undefined || i2 === undefined) continue;
+      const found = bidx.get(Math.min(i1, i2) + ':' + Math.max(i1, i2));
+      if (!found) continue;
+      const bond = found.bond;
+      // KET 约定：atoms[0] 是楔键窄端。渲染时窄端由 hb1 决定，所以翻转键方向
+      // 必须同时交换 hb1/hb2，否则楔键会画在错误的一端。
+      if (bond.begin !== i1) {
+        const tb = bond.begin, th = bond.hb1;
+        bond.begin = bond.end; bond.end = tb;
+        bond.hb1 = bond.hb2; bond.hb2 = th;
+        flipped.push(found.id);
+      }
+      bond.stereo = b.stereo || 0;
+    }
+  }
+  return flipped;
+}
+
+/* 标记变更项：ReStruct.update 只重画 atomsChanged / bondsChanged 里的对象，
+   直接改坐标而不标记，画面会保持原样（模型变了、显示没变）。 */
+function markChanged(ed, atomIds, bondIds) {
+  const ctab = ed && ed.render && ed.render.ctab;
+  if (!ctab) return;
+  if (typeof ctab.markAtom === 'function') for (const id of atomIds) ctab.markAtom(id, 1);
+  if (typeof ctab.markBond === 'function') for (const id of bondIds) ctab.markBond(id, 1);
+}
+
+/* 一次可撤销操作：推入"回到整理前"的动作，撤销时执行它 */
+function makeUndoAction(snap) {
+  return {
+    operations: [],
+    isDummy: function () { return false; },
+    perform: function (ctab) {
+      const struct = (ctab && ctab.molecule) ? ctab.molecule : ctab;
+      if (struct) applyState(struct, snap);
+      // 撤销/重做同样要标记变更，否则模型回退了画面不动
+      if (ctab && typeof ctab.markAtom === 'function') {
+        for (const a of snap.atoms) ctab.markAtom(a[0], 1);
+      }
+      if (ctab && typeof ctab.markBond === 'function') {
+        for (const b of snap.bonds) ctab.markBond(b[0], 1);
+      }
+      return makeUndoAction(snap.inverse || snap);
+    }
+  };
+}
+
+function normalizeKet(json) {
+  // 去掉选中标记后比较，避免"只改了选区"被当成内容变化
+  const strip = (v) => {
+    if (Array.isArray(v)) return v.map(strip);
+    if (v && typeof v === 'object') {
+      const out = {};
+      for (const k of Object.keys(v)) {
+        if (k === 'selected' || k === 'initiallySelected') continue;
+        out[k] = strip(v[k]);
+      }
+      return out;
+    }
+    return v;
+  };
+  return JSON.stringify(strip(json));
+}
+
+async function postJSON(path, payload) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  let body = null;
+  try { body = await r.json(); } catch (e) { body = null; }
+  if (!body) return { ok: false, code: 'http_' + r.status, error: '服务返回了无法解析的结果' };
+  return body;
+}
+
+async function cleanLayout() {
+  const k = ketcher(); const ed = editor();
+  if (!k || !ed) return { ok: false, code: 'not_ready', message: '编辑器尚未就绪' };
+
+  const parts = selectionParts();
+  const hasMoleculeSelection = parts.atoms.length > 0 || parts.bonds.length > 0;
+  if (!hasMoleculeSelection && parts.others > 0) {
+    return { ok: false, code: 'no_molecule', message: '请选择要整理的分子' };
+  }
+  // 只选中机理对象（箭头/孤对）时不能把整张画布当成"无选区"来整理
+  if (!hasMoleculeSelection && mechSelectionCount() > 0) {
+    return { ok: false, code: 'no_molecule', message: '请选择分子（当前只选中了机理对象）' };
+  }
+
+  let ket;
+  try { ket = await k.getKet(); } catch (e) { return { ok: false, code: 'snapshot', message: '无法读取画布内容' }; }
+  if (!ket || !ket.trim()) return { ok: false, code: 'empty', message: '画布是空的' };
+
+  let doc;
+  try { doc = JSON.parse(ket); } catch (e) { return { ok: false, code: 'bad_ket', message: '画布数据无法解析' }; }
+  const allKeys = orderedMoleculeKeys(doc);
+  if (!allKeys.length) return { ok: false, code: 'no_molecule', message: '画布上没有分子' };
+
+  const points = hasMoleculeSelection ? selectionPoints(parts) : [];
+  if (hasMoleculeSelection && !points.length) {
+    return { ok: false, code: 'no_molecule', message: '请选择要整理的分子' };
+  }
+
+  const identity = identityOf(ket);
+  const res = await postJSON('/api/layout', { ket, points, identity });
+  if (!res || res.ok !== true) {
+    return { ok: false, code: (res && res.code) || 'layout_failed',
+             message: (res && res.error) || '整理失败，原图未修改' };
+  }
+
+  // 异步期间画布被改动 → 旧结果作废，不覆盖新内容
+  let ketNow;
+  try { ketNow = await k.getKet(); } catch (e) { ketNow = null; }
+  if (ketNow === null || normalizeKet(JSON.parse(ketNow)) !== normalizeKet(doc)) {
+    return { ok: false, code: 'stale', message: '画布内容已改变，本次整理未应用' };
+  }
+
+  const st = ed.struct();
+  const built = buildAtomMap(doc, st);
+  if (built.error) return { ok: false, code: 'mapping', message: built.error };
+
+  const before = captureState(st, built.map, res.molecules);
+  applyLayout(st, built.map, res.molecules);
+  const after = captureState(st, built.map, res.molecules);
+  before.inverse = after;
+  after.inverse = before;
+  const markLayoutChanged = () => markChanged(ed, before.atoms.map(a => a[0]), before.bonds.map(b => b[0]));
+
+  /* 整理改变了分子坐标 → 受影响的 auto 箭头按新几何重排，并与坐标更新合成
+     同一个历史动作（manual 箭头保留用户 bend）。旧实现只改坐标，箭头沿用旧
+     bend，会出现箭头穿键/穿标签（规范 3/8）。 */
+  const controller = window.MolWorkbench && window.MolWorkbench.app && window.MolWorkbench.app.controller;
+  const model = window.MolWorkbench && window.MolWorkbench.app && window.MolWorkbench.app.model;
+  let mechBefore = null, mechAfter = null, replannedArrows = 0, crowdedArrows = 0;
+  // 机理层回滚：重排中途失败/历史合并失败/提交失败时都要还原箭头，避免与坐标不一致
+  const restoreMech = () => {
+    if (model && mechBefore) { try { model.setState(mechBefore, 'silent'); } catch (e) {} }
+    replannedArrows = crowdedArrows = 0;
+  };
+  if (controller && model && typeof controller.replanArrowInPlace === 'function') {
+    try {
+      mechBefore = model.cloneState();
+      if (model.state.arrows.some(arrow => window.MolWorkbench.model.arrowMode(arrow) === 'auto')) {
+        // 路由读取 SVG 字形包围盒，必须先重绘新坐标，再建立障碍物场景。
+        markLayoutChanged();
+        ed.render.update();
+      }
+      const replannedIds = [];
+      const finalPlans = new Map();
+      for (const arrow of model.state.arrows) {
+        if (window.MolWorkbench.model.arrowMode(arrow) !== 'auto') continue;
+        const plan = controller.replanArrowInPlace(arrow, true);
+        if (plan) {
+          replannedIds.push(arrow.id);
+          finalPlans.set(arrow.id, plan);
+        }
+      }
+      if (replannedIds.length && typeof controller.replanConcertedArrows === 'function') {
+        for (const [id, plan] of controller.replanConcertedArrows(replannedIds)) finalPlans.set(id, plan);
+      }
+      replannedArrows = finalPlans.size;
+      crowdedArrows = Array.from(finalPlans.values()).filter(p => p && !p.feasible).length;
+      mechAfter = model.cloneState();
+    } catch (e) { restoreMech(); mechBefore = mechAfter = null; }
+  }
+
+  let action = makeUndoAction(before);
+  if (controller && mechBefore && mechAfter) {
+    try {
+      action = controller.wrapNativeHistory(action, mechBefore, mechAfter, new Set(controller.selection), new Set(controller.selection));
+    } catch (e) { /* 历史合并失败时退回纯坐标整理，不阻塞整理 */ restoreMech(); }
+  }
+  markLayoutChanged();
+  try { ed.update(action); }
+  catch (e) {
+    applyState(st, before);
+    restoreMech();
+    markLayoutChanged();
+    ed.update(true);
+    return { ok: false, code: 'commit', message: '无法提交整理结果，原图未修改' };
+  }
+  if (controller) { try { controller.refreshAutoSlots(); controller.render(); } catch (e) {} }
+
+  const report = (res.molecules && res.molecules[0] && res.molecules[0].report) || {};
+  let message = '结构已整理' + (replannedArrows ? '，并重排 ' + replannedArrows + ' 根自动箭头' : '') + (crowdedArrows ? '（' + crowdedArrows + ' 根仍拥挤）' : '');
+  if (Array.isArray(res.skipped) && res.skipped.length) {
+    message += '；已跳过 ' + res.skipped.length + ' 个校验未通过的结构（' + res.skipped[0].error + '）';
+  }
+  const ret = { ok: true, code: 'ok', message,
+           molecules: res.molecules.map(m => m.key),
+           arrowsReplanned: replannedArrows,
+           arrowsCrowded: crowdedArrows,
+           crossCenters: report.crossCenters === undefined ? null : report.crossCenters };
+  if (Array.isArray(res.skipped) && res.skipped.length) {
+    ret.skipped = res.skipped;
+  }
+  return ret;
+}
+
+/* 工具栏按钮入口：结果回报原生（或网页内提示） */
+async function cleanLayoutFromUI() {
+  let res;
+  try { res = await cleanLayout(); }
+  catch (e) { res = { ok: false, code: 'error', message: String(e) }; }
+  notifyNative({ act: 'layoutResult', ok: !!res.ok, code: res.code || '',
+                 message: res.message || '' });
+  if (!bridge()) toast(res.message || (res.ok ? '结构已整理' : '整理未完成'));
+  return res;
+}
+
+/* ---------------- 生成 3D 的目标清单 ---------------- */
+async function stereoTargets() {
+  const k = ketcher(); const ed = editor();
+  if (!k || !ed) return { ok: false, code: 'not_ready', message: '编辑器尚未就绪' };
+  let ket;
+  try { ket = await k.getKet(); } catch (e) { return { ok: false, code: 'snapshot', message: '无法读取画布内容' }; }
+  if (!ket || !ket.trim()) return { ok: false, code: 'empty', message: '画布是空的' };
+  let doc;
+  try { doc = JSON.parse(ket); } catch (e) { return { ok: false, code: 'bad_ket', message: '画布数据无法解析' }; }
+  const allKeys = orderedMoleculeKeys(doc);
+  if (!allKeys.length) return { ok: false, code: 'empty', message: '画布是空的，先画一个结构' };
+
+  const parts = selectionParts();
+  const hasMoleculeSelection = parts.atoms.length > 0 || parts.bonds.length > 0;
+  let keys = allKeys;
+  if (hasMoleculeSelection) {
+    keys = touchedKeys(doc, allKeys, selectionPoints(parts));
+    if (!keys.length) return { ok: false, code: 'no_molecule', message: '请选择分子' };
+  } else if (parts.others > 0) {
+    return { ok: false, code: 'no_molecule', message: '请选择分子（当前只选中了文字或图形）' };
+  } else if (mechSelectionCount() > 0) {
+    return { ok: false, code: 'no_molecule', message: '请选择分子（当前只选中了机理对象）' };
+  }
+  const labels = {};
+  allKeys.forEach((key, i) => { labels[key] = '分子 ' + (i + 1); });
+  return {
+    ok: true, ket, keys, allKeys, labels,
+    identity: identityOf(ket),
+    selection: { atoms: parts.atoms.length, bonds: parts.bonds.length, others: parts.others },
+    hasSelection: hasMoleculeSelection
+  };
+}
+
+/* ---------------- iframe 事件接线 ---------------- */
+kd.addEventListener('load', () => {
+  // 拦截 Ketcher 内建的 ⌘S / ⌘O / ⌘N（交给原生菜单），以及 Layout(⌘L)、Clean Up(⌘⇧L)
+  kd.contentDocument.addEventListener('keydown', e => {
+    if (!e.metaKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 's' || k === 'o' || k === 'n') {
+      e.preventDefault();
+      e.stopPropagation();
+      notifyNative({ act: k === 's' ? 'save' : (k === 'o' ? 'open' : 'new') });
+      return;
+    }
+    if (k === 'l') {
+      // ⌘L = Layout，⌘⇧L = Clean Up：两者都走统一整理（Ketcher 自带实现会把
+      // 手性中心排成机械十字，见实施报告）
+      e.preventDefault();
+      e.stopPropagation();
+      cleanLayoutFromUI();
+    }
+  }, true);
+
+  const d = kdDoc();
+  if (!d) return;
+  // 顶部按钮：3D 转给原生；Layout / Clean Up 转给统一整理
+  d.addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest(
+      '[data-testid="3D Viewer button"],[data-testid="Layout button"],[data-testid="Clean Up button"]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const tid = btn.getAttribute('data-testid');
+    if (tid === '3D Viewer button') {
+      if (bridge()) notifyNative({ act: 'gen3d' });
+      else if (window.parent !== window) window.parent.postMessage({ type: 'k3d-gen3d' }, '*');
+      return;
+    }
+    cleanLayoutFromUI();
+  }, { capture: true });
+  viewport.install(d);
+});
+
+window.k3dAPI = {
+  ready: () => !!ketcher(),
+  getSmiles: () => new Promise((res, rej) => {
+    const k = ketcher(); if (!k) return rej('not ready');
+    k.getSmiles().then(s => res((s || '').trim())).catch(rej);
+  }),
+  getMolfile: () => new Promise((res, rej) => {
+    const k = ketcher(); if (!k) return rej('not ready');
+    k.getMolfile().then(m => res(m || '')).catch(rej);
+  }),
+  isReady: () => !!ketcher(),
+  getKet: () => new Promise((res, rej) => {
+    const k = ketcher(); if (!k) return rej('not ready');
+    if (typeof k.getKet !== 'function') return rej('no getKet');
+    Promise.resolve(k.getKet()).then(res).catch(rej);
+  }),
+  setMolecule: m => { const k = ketcher(); return k ? k.setMolecule(m) : null; },
+  clear: () => { const k = ketcher(); return k ? k.setMolecule('') : null; },
+  resetPan: () => { panX = 0; panY = 0; applyPan(); },
+  zoom: dir => {
+    return viewport.zoomBy(dir < 0 ? 1.25 : 0.8);
+  },
+  selectionAtoms: () => {
+    const k = ketcher(); if (!k) return '[]';
+    try {
+      const e = k.editor;
+      const sel = (e && typeof e.selection === 'function') ? e.selection() : null;
+      const atoms = (sel && sel.atoms) ? sel.atoms : [];
+      return JSON.stringify(atoms);
+    } catch (err) { return '[]'; }
+  },
+  selectionPoints: () => {
+    // 选区原子坐标（化学坐标系）——后端按位置匹配 molfile 原子行，
+    // 与行号无关：官方 molfile 行序 ≠ Ketcher 内部 id 序时索引会错位（选 2 出 1 的根因）
+    const k = ketcher(); if (!k) return '[]';
+    try {
+      const e = k.editor;
+      const sel = (e && typeof e.selection === 'function') ? e.selection() : null;
+      const ids = (sel && sel.atoms) ? sel.atoms : [];
+      const st = e.struct();
+      const pts = [];
+      for (const id of ids) {
+        const a = st.atoms.get(id);
+        // pp 是屏幕坐标系（y 向下），molfile 是化学坐标系（y 向上）→ y 取反
+        if (a && a.pp) pts.push([Math.round(a.pp.x * 10000) / 10000, Math.round(-a.pp.y * 10000) / 10000]);
+      }
+      return JSON.stringify(pts);
+    } catch (err) { return '[]'; }
+  },
+  selectionCount: () => {
+    const k = ketcher(); if (!k) return 0;
+    try {
+      const e = k.editor;
+      const sel = (e && typeof e.selection === 'function') ? e.selection() : null;
+      if (sel && sel.atoms) return sel.atoms.length;
+    } catch (err) {}
+    return 0;
+  },
+  zoomBy: (f, point) => viewport.zoomBy(f, point),
+  // 撤销/重做走编辑器 API：Ketcher 的热键监听不认脚本合成的 keydown（实测无效），
+  // 原生"编辑 → 撤销"菜单因此一直空转；直接调用 editor.undo()/redo() 才真正生效。
+  undo: () => { const ed = editor(); if (!ed) return; try { ed.undo(); } catch (e) {} },
+  redo: () => { const ed = editor(); if (!ed) return; try { ed.redo(); } catch (e) {} },
+  selectAll: () => { const ed = editor(); if (!ed) return false; try { ed.selection('all'); return true; } catch (e) { return false; } },
+  deleteSel: () => {
+    const ed = editor(); if (!ed) return;
+    try {
+      if (ed.event && ed.event.deleteSelectedStructure && ed.event.deleteSelectedStructure.dispatch) {
+        ed.event.deleteSelectedStructure.dispatch();
+        return;
+      }
+    } catch (e) {}
+    // 3.18 里没有 event.deleteSelectedStructure；Backspace 必须发到真正有焦点/画布元素上，
+    // 发到 document 不会冒泡到 Ketcher 的处理层（实测删不掉，原生"删除所选"因此空转）
+    const d = kdDoc(); if (!d) return;
+    const w = kd.contentWindow;
+    const target = d.activeElement || d.querySelector('[data-testid="canvas"]') || d.body;
+    // 事件必须用 iframe 自己的构造器：跨 realm 的 KeyboardEvent 过不了 Ketcher 的
+    // normalizeShortcut（instanceof 检查失败），快捷键会被静默忽略
+    const Ctor = (w && w.KeyboardEvent) ? w.KeyboardEvent : KeyboardEvent;
+    target.dispatchEvent(new Ctor('keydown', {
+      key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true, cancelable: true
+    }));
+  },
+
+  // 统一整理（顶部 Layout、⌘L、Clean Up、原生"结构 → 清理结构"共用）
+  cleanLayout: () => cleanLayout(),
+  // 生成 3D 前的目标清单（含整份 KET，交给后端做立体检查）
+  stereoTargets: () => stereoTargets(),
+  // 当前文档身份：异步请求返回后用它确认"还是同一份输入"
+  docIdentity: () => new Promise((res, rej) => {
+    const k = ketcher(); if (!k) return rej('not ready');
+    Promise.resolve(k.getKet()).then(ket => res(identityOf(ket || ''))).catch(rej);
+  }),
+  // 诊断用：当前选区分类
+  selectionParts: () => JSON.stringify(selectionParts())
+};
+</script>
+<!-- 机理层（孤对 / 弯箭头 / 鱼钩）。按固定顺序加载，无需构建系统；全部随包离线可用。 -->
+<script src="workbench/mechanism-model.js"></script>
+<script src="workbench/mechanism-route.js"></script>
+<script src="workbench/workbench-storage.js"></script>
+<script src="workbench/ketcher-adapter.js"></script>
+<script src="workbench/mechanism-layer.js"></script>
+<script src="workbench/mechanism-controller.js"></script>
+<script src="workbench/mechanism-ui.js"></script>
+<script src="workbench/mechanism-export.js"></script>
+<script>window.MolWorkbenchOptions = { automaticReadingZoom: 1 };</script>
+<script src="workbench/main.js"></script>
+<script src="workbench/reaction-graph-layout.js"></script>
+<script src="workbench/reaction-reagent-placement.js"></script>
+<script src="workbench/agent-bridge.js"></script>
+<script src="agent/dist/agent-runtime.js"></script>
+<script src="agent/panel.js"></script>
+<script src="agent/app.js"></script>
+</body>
+</html>

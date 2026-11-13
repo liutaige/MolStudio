@@ -1,0 +1,397 @@
+{
+  "provenance": "Observed native graph from phases-model-verified/completed-context.json (MolStudio canvas, 2026-11-13); coordinates, plans, messages and unrelated fields omitted.",
+  "atoms": [
+    {
+      "id": "at-33bac037-8001-4cc8-a7bb-01495fe18f3c",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 3
+    },
+    {
+      "id": "at-beb41293-f819-4c5e-b943-15b3812e004e",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 1
+    },
+    {
+      "id": "at-60e90111-fc65-4ba6-a23f-5d49cc18f8dd",
+      "label": "O",
+      "charge": 0,
+      "implicitH": 0
+    },
+    {
+      "id": "at-74d9270e-e9be-43b9-9799-c260fbb8fb91",
+      "label": "O",
+      "charge": 1,
+      "implicitH": 2
+    },
+    {
+      "id": "at-2534afc6-52b3-4a20-8399-b524399a22f7",
+      "label": "H",
+      "charge": 0,
+      "implicitH": 0
+    },
+    {
+      "id": "at-7fc9d0de-c5d7-4bca-9837-ed3c43d39ea5",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 3
+    },
+    {
+      "id": "at-ee9fe108-9da5-42a4-838e-035766652266",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 1
+    },
+    {
+      "id": "at-9cc77add-0e1d-4c92-816d-768997757310",
+      "label": "O",
+      "charge": 1,
+      "implicitH": 0
+    },
+    {
+      "id": "at-8d7661eb-f2f4-4b01-935d-9e8c4cc1b0a8",
+      "label": "H",
+      "charge": 0,
+      "implicitH": 0
+    },
+    {
+      "id": "at-4182ff1b-cb08-40b7-a67f-753fa4c8ffe5",
+      "label": "O",
+      "charge": 0,
+      "implicitH": 2
+    },
+    {
+      "id": "at-413d23b1-57db-42d6-b793-6d0f03c53682",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 3
+    },
+    {
+      "id": "at-2d17041e-7cf9-46dd-b6a5-76ab80534cf6",
+      "label": "O",
+      "charge": 0,
+      "implicitH": 1
+    },
+    {
+      "id": "at-1573126a-f672-4cbb-b19d-dc0751bacdec",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 3
+    },
+    {
+      "id": "at-2dc8eae7-6ebc-44ab-b4f3-6f3587f49a79",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 1
+    },
+    {
+      "id": "at-51de9a33-2eeb-455a-999a-c97471ad10a0",
+      "label": "O",
+      "charge": 0,
+      "implicitH": 1
+    },
+    {
+      "id": "at-daedc445-dc3c-4272-a76c-31132bab272c",
+      "label": "O",
+      "charge": 1,
+      "implicitH": 0
+    },
+    {
+      "id": "at-1edb2287-7608-4af5-8c1e-238fb246e1a4",
+      "label": "H",
+      "charge": 0,
+      "implicitH": 0
+    },
+    {
+      "id": "at-e9ede0c1-cadc-4d53-abec-840ae090cdd0",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 3
+    },
+    {
+      "id": "at-3782b425-89bc-44ff-89e6-92e0105c279d",
+      "label": "O",
+      "charge": 0,
+      "implicitH": 2
+    },
+    {
+      "id": "at-dff412bc-eaf4-46c8-b3da-4137a38411af",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 3
+    },
+    {
+      "id": "at-88d3d82c-d827-4156-addf-2d22d4dca629",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 1
+    },
+    {
+      "id": "at-1208f217-f189-44f9-9fc3-660226444b0c",
+      "label": "O",
+      "charge": 0,
+      "implicitH": 1
+    },
+    {
+      "id": "at-9d1eb305-e1f8-4ed7-96a5-7b23c8df48d2",
+      "label": "O",
+      "charge": 0,
+      "implicitH": 0
+    },
+    {
+      "id": "at-4281f7ea-eaa3-4af6-9d7f-e91805d7bd04",
+      "label": "C",
+      "charge": 0,
+      "implicitH": 3
+    },
+    {
+      "id": "at-cc4d3b60-bb00-423c-880e-773c6d9ffe62",
+      "label": "O",
+      "charge": 1,
+      "implicitH": 2
+    },
+    {
+      "id": "at-721932d7-6cfe-4694-94f5-abc324f7202e",
+      "label": "H",
+      "charge": 0,
+      "implicitH": 0
+    }
+  ],
+  "bonds": [
+    {
+      "id": "bd-fa5d8f00-275c-4522-909f-257751b82f6b",
+      "begin": "at-33bac037-8001-4cc8-a7bb-01495fe18f3c",
+      "end": "at-beb41293-f819-4c5e-b943-15b3812e004e",
+      "order": 1
+    },
+    {
+      "id": "bd-5d1dfdf8-0c02-478f-9943-345bcf302419",
+      "begin": "at-beb41293-f819-4c5e-b943-15b3812e004e",
+      "end": "at-60e90111-fc65-4ba6-a23f-5d49cc18f8dd",
+      "order": 2
+    },
+    {
+      "id": "bd-cf1275ee-6b1c-410c-9403-bc024ce7faa5",
+      "begin": "at-74d9270e-e9be-43b9-9799-c260fbb8fb91",
+      "end": "at-2534afc6-52b3-4a20-8399-b524399a22f7",
+      "order": 1
+    },
+    {
+      "id": "bd-35583345-96ce-40a7-9090-dbf380d1781d",
+      "begin": "at-7fc9d0de-c5d7-4bca-9837-ed3c43d39ea5",
+      "end": "at-ee9fe108-9da5-42a4-838e-035766652266",
+      "order": 1
+    },
+    {
+      "id": "bd-a9ed3687-7a8d-446d-be53-bf317241051a",
+      "begin": "at-ee9fe108-9da5-42a4-838e-035766652266",
+      "end": "at-9cc77add-0e1d-4c92-816d-768997757310",
+      "order": 2
+    },
+    {
+      "id": "bd-f3a8a23d-545f-4a06-9f25-86566d1b7e25",
+      "begin": "at-9cc77add-0e1d-4c92-816d-768997757310",
+      "end": "at-8d7661eb-f2f4-4b01-935d-9e8c4cc1b0a8",
+      "order": 1
+    },
+    {
+      "id": "bd-15c57476-145c-4896-ba0a-de59b150e7d2",
+      "begin": "at-413d23b1-57db-42d6-b793-6d0f03c53682",
+      "end": "at-2d17041e-7cf9-46dd-b6a5-76ab80534cf6",
+      "order": 1
+    },
+    {
+      "id": "bd-7ae6b99a-7656-456e-8b7e-01272a608b5c",
+      "begin": "at-1573126a-f672-4cbb-b19d-dc0751bacdec",
+      "end": "at-2dc8eae7-6ebc-44ab-b4f3-6f3587f49a79",
+      "order": 1
+    },
+    {
+      "id": "bd-d1265438-de31-462b-b9ad-693cf78ae478",
+      "begin": "at-2dc8eae7-6ebc-44ab-b4f3-6f3587f49a79",
+      "end": "at-51de9a33-2eeb-455a-999a-c97471ad10a0",
+      "order": 1
+    },
+    {
+      "id": "bd-4ce6b95d-c7d5-464d-a890-7aea8a356971",
+      "begin": "at-2dc8eae7-6ebc-44ab-b4f3-6f3587f49a79",
+      "end": "at-daedc445-dc3c-4272-a76c-31132bab272c",
+      "order": 1
+    },
+    {
+      "id": "bd-81d39f5f-35b6-4db3-a6ae-06f8d39f7268",
+      "begin": "at-daedc445-dc3c-4272-a76c-31132bab272c",
+      "end": "at-1edb2287-7608-4af5-8c1e-238fb246e1a4",
+      "order": 1
+    },
+    {
+      "id": "bd-5bc4c9ba-d2a6-400c-9e9e-c54b1e2fc1a3",
+      "begin": "at-daedc445-dc3c-4272-a76c-31132bab272c",
+      "end": "at-e9ede0c1-cadc-4d53-abec-840ae090cdd0",
+      "order": 1
+    },
+    {
+      "id": "bd-0e90feb9-7ba8-4c2f-a474-4e7c9059f225",
+      "begin": "at-dff412bc-eaf4-46c8-b3da-4137a38411af",
+      "end": "at-88d3d82c-d827-4156-addf-2d22d4dca629",
+      "order": 1
+    },
+    {
+      "id": "bd-4192d7a0-525b-4c7e-a64b-e13e1de5f786",
+      "begin": "at-88d3d82c-d827-4156-addf-2d22d4dca629",
+      "end": "at-1208f217-f189-44f9-9fc3-660226444b0c",
+      "order": 1
+    },
+    {
+      "id": "bd-a1f7d93f-e178-41d3-8004-77f966da9f38",
+      "begin": "at-88d3d82c-d827-4156-addf-2d22d4dca629",
+      "end": "at-9d1eb305-e1f8-4ed7-96a5-7b23c8df48d2",
+      "order": 1
+    },
+    {
+      "id": "bd-90cca708-f6d7-4e26-b62a-debcc8d8ea79",
+      "begin": "at-9d1eb305-e1f8-4ed7-96a5-7b23c8df48d2",
+      "end": "at-4281f7ea-eaa3-4af6-9d7f-e91805d7bd04",
+      "order": 1
+    },
+    {
+      "id": "bd-a9cbf198-09a7-4b19-9a7f-f33d6978bcd9",
+      "begin": "at-cc4d3b60-bb00-423c-880e-773c6d9ffe62",
+      "end": "at-721932d7-6cfe-4694-94f5-abc324f7202e",
+      "order": 1
+    }
+  ],
+  "lonePairs": [
+    {
+      "id": "lp-04b56634-30af-4286-8a28-e597db0480f8",
+      "ownerAtomId": "at-60e90111-fc65-4ba6-a23f-5d49cc18f8dd"
+    },
+    {
+      "id": "lp-b691443e-7500-4ea9-b95c-857f749fa7c6",
+      "ownerAtomId": "at-2d17041e-7cf9-46dd-b6a5-76ab80534cf6"
+    },
+    {
+      "id": "lp-7f704628-dbab-42db-801f-fe7a075fae25",
+      "ownerAtomId": "at-3782b425-89bc-44ff-89e6-92e0105c279d"
+    }
+  ],
+  "arrows": [
+    {
+      "id": "ar-4a3645f0-65b9-4e2f-84f0-d9e40ea1c7d1",
+      "electronCount": 2,
+      "source": {
+        "type": "bond",
+        "bondId": "bd-cf1275ee-6b1c-410c-9403-bc024ce7faa5",
+        "component": "sigma"
+      },
+      "target": {
+        "type": "atom",
+        "atomId": "at-74d9270e-e9be-43b9-9799-c260fbb8fb91"
+      }
+    },
+    {
+      "id": "ar-6a882b66-d32a-49d9-a5fa-2caebc3be474",
+      "electronCount": 2,
+      "source": {
+        "type": "lonePair",
+        "ownerAtomId": "at-60e90111-fc65-4ba6-a23f-5d49cc18f8dd",
+        "slotId": "lp-04b56634-30af-4286-8a28-e597db0480f8"
+      },
+      "target": {
+        "type": "atom",
+        "atomId": "at-2534afc6-52b3-4a20-8399-b524399a22f7"
+      }
+    },
+    {
+      "id": "ar-2b707fc5-9064-48f1-8a09-4e813f5245b7",
+      "electronCount": 2,
+      "source": {
+        "type": "lonePair",
+        "slotId": "lp-b691443e-7500-4ea9-b95c-857f749fa7c6",
+        "ownerAtomId": "at-2d17041e-7cf9-46dd-b6a5-76ab80534cf6"
+      },
+      "target": {
+        "type": "formingBond",
+        "atomA": "at-2d17041e-7cf9-46dd-b6a5-76ab80534cf6",
+        "atomB": "at-ee9fe108-9da5-42a4-838e-035766652266"
+      }
+    },
+    {
+      "id": "ar-fa8e9747-27e0-4001-a08e-55e0726d19a5",
+      "electronCount": 2,
+      "source": {
+        "type": "bond",
+        "bondId": "bd-a9ed3687-7a8d-446d-be53-bf317241051a",
+        "component": "pi"
+      },
+      "target": {
+        "type": "atom",
+        "atomId": "at-9cc77add-0e1d-4c92-816d-768997757310"
+      }
+    },
+    {
+      "id": "ar-dbb99eb9-8a23-4cd8-9e5f-952cf9e21666",
+      "electronCount": 2,
+      "source": {
+        "type": "lonePair",
+        "slotId": "lp-7f704628-dbab-42db-801f-fe7a075fae25",
+        "ownerAtomId": "at-3782b425-89bc-44ff-89e6-92e0105c279d"
+      },
+      "target": {
+        "type": "atom",
+        "atomId": "at-1edb2287-7608-4af5-8c1e-238fb246e1a4"
+      }
+    },
+    {
+      "id": "ar-9f0a490a-e7c5-471e-b95c-f9f7af447065",
+      "electronCount": 2,
+      "source": {
+        "type": "bond",
+        "bondId": "bd-81d39f5f-35b6-4db3-a6ae-06f8d39f7268",
+        "component": "sigma"
+      },
+      "target": {
+        "type": "atom",
+        "atomId": "at-daedc445-dc3c-4272-a76c-31132bab272c"
+      }
+    }
+  ],
+  "reactionSteps": [
+    {
+      "stepId": "rs-164034af-e732-4c90-8b97-d133c6f3d573",
+      "version": 1,
+      "reactants": [
+        "at-beb41293-f819-4c5e-b943-15b3812e004e",
+        "at-74d9270e-e9be-43b9-9799-c260fbb8fb91"
+      ],
+      "products": [
+        "at-9cc77add-0e1d-4c92-816d-768997757310",
+        "at-4182ff1b-cb08-40b7-a67f-753fa4c8ffe5"
+      ]
+    },
+    {
+      "stepId": "rs-4c9649f9-7648-4482-8995-facd3c967d34",
+      "version": 1,
+      "reactants": [
+        "at-ee9fe108-9da5-42a4-838e-035766652266",
+        "at-2d17041e-7cf9-46dd-b6a5-76ab80534cf6"
+      ],
+      "products": [
+        "at-daedc445-dc3c-4272-a76c-31132bab272c"
+      ]
+    },
+    {
+      "stepId": "rs-c1142730-ed17-46de-8bb9-7b449bf962f2",
+      "version": 1,
+      "reactants": [
+        "at-daedc445-dc3c-4272-a76c-31132bab272c",
+        "at-3782b425-89bc-44ff-89e6-92e0105c279d"
+      ],
+      "products": [
+        "at-88d3d82c-d827-4156-addf-2d22d4dca629",
+        "at-cc4d3b60-bb00-423c-880e-773c6d9ffe62"
+      ]
+    }
+  ]
+}

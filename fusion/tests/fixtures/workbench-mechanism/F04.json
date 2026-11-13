@@ -1,0 +1,65 @@
+[
+ {
+  "id": "F04-water-implicit",
+  "smiles": "O",
+  "note": "水中性 O",
+  "expectedPairs": 2,
+  "got": 2
+ },
+ {
+  "id": "F04-water-explicit",
+  "smiles": "[H]O[H]",
+  "note": "水（显式氢）",
+  "expectedPairs": 2,
+  "got": 2
+ },
+ {
+  "id": "F04-hydroxide",
+  "smiles": "[OH-]",
+  "note": "OH⁻",
+  "expectedPairs": 3,
+  "got": 3
+ },
+ {
+  "id": "F04-hydronium",
+  "smiles": "[OH3+]",
+  "note": "H₃O⁺",
+  "expectedPairs": 1,
+  "got": 1
+ },
+ {
+  "id": "F04-ammonia",
+  "smiles": "N",
+  "note": "氨",
+  "expectedPairs": 1,
+  "got": 1
+ },
+ {
+  "id": "F04-ammonium",
+  "smiles": "[NH4+]",
+  "note": "铵",
+  "expectedPairs": 0,
+  "got": 0
+ },
+ {
+  "id": "F04-chloromethane",
+  "smiles": "CCl",
+  "note": "氯甲烷的 Cl",
+  "expectedPairs": 3,
+  "got": 3
+ },
+ {
+  "id": "F04-chloride",
+  "smiles": "[Cl-]",
+  "note": "氯离子",
+  "expectedPairs": 4,
+  "got": 4
+ },
+ {
+  "id": "F04-carbonyl",
+  "smiles": "CC=O",
+  "note": "羰基氧",
+  "expectedPairs": 2,
+  "got": 2
+ }
+]

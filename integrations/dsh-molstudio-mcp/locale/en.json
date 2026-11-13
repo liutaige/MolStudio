@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "MolStudio canvas",
+    "description": "Draws and inspects molecules, reaction steps, lone pairs, and curved electron-flow arrows on a live MolStudio canvas, with every edit committed as an editable object and shown in the MolStudio AI panel.",
+    "detail": "docs/DETAIL.md"
+  }
+}

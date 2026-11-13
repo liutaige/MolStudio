@@ -1,0 +1,23 @@
+{
+  "name": "@local/molstudio-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Connects the MolStudio chemistry canvas MCP server to DeepSeek Harness.",
+  "exports": {
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "README.md",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

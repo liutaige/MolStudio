@@ -1,0 +1,27 @@
+# 依赖与构建产物（可重生成，不进版本库）
+fusion/node_modules/
+fusion/agent/node_modules/
+fusion/agent/dist/
+fusion/dist/
+fusion/__pycache__/
+fusion/tests/artifacts/
+fusion/tests/evidence/
+**/__pycache__/
+*.pyc
+fusion-native/.build/
+fusion-native/dist/
+.venv-rdkit/
+# 归档/备份（大二进制）
+*.zip
+*.tar.gz
+backup/
+# 本地调查缓存与验收产物
+.cache/
+.jez/
+# 本地分支可保留文档应用；其他历史研究材料不再纳入源码
+research/*
+!research/document-editor-prototype/
+# 系统
+.DS_Store
+.cursor/
+.claude/

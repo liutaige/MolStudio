@@ -1,0 +1,35 @@
+{
+  "note": "真实 Ketcher 3.18 画布导出：芳香化/去芳香化/电荷工具均为真实指针点击",
+  "cases": [
+    {
+      "id": "a01",
+      "file": "a01-aromatic-cyclopropenyl-cation.ket",
+      "note": "芳香圆圈三元环 + C+（KET 带 implicitHCount:1）",
+      "smiles": "c1[cH+]c1"
+    },
+    {
+      "id": "a02",
+      "file": "a02-kekule-cyclopropenyl-cation.ket",
+      "note": "a01 去芳香化：一条双键 + 两条单键",
+      "smiles": "C1[CH+]C=1"
+    },
+    {
+      "id": "a03",
+      "file": "a03-benzene.ket",
+      "note": "苯（芳香回归）",
+      "smiles": "c1ccccc1"
+    },
+    {
+      "id": "a04",
+      "file": "a04-aromatic-ring-charged-after.ket",
+      "note": "先画芳香键再加电荷：KET 无 implicitHCount（编辑器认为该碳 0 氢）",
+      "smiles": "[c+]1cc1"
+    },
+    {
+      "id": "a05",
+      "file": "a05-methyl-aromatic-cation.ket",
+      "note": "1-甲基环丙烯正离子：正电碳有取代基，不应补氢",
+      "smiles": "[c+]1(C)cc1"
+    }
+  ]
+}

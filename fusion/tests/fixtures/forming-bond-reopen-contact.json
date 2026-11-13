@@ -1,0 +1,133 @@
+{
+  "application": "MolStudio canvas",
+  "page": "fusion/canvas.html",
+  "build": "release-reading/MolStudio.app (49094)",
+  "provenance": "Actual real-model frozen reading-route-live/phase-01.molwork, independent save/reopen observations at the same reading zoom. Minimal two relevant bonds only; no model transcript or reasoning.",
+  "arrowId": "ar-b02abed1-5b8d-473a-ad5f-5c67f8ab4505",
+  "cases": [
+    {
+      "kind": "beforeReopen",
+      "source": {
+        "type": "bond",
+        "bondId": "bd-b8a8b9c1-6866-4d8b-a4f8-31d436d58d3d",
+        "component": "pi"
+      },
+      "target": {
+        "type": "formingBond",
+        "atomA": "at-d3e5af87-a135-4d55-b81e-5df8865ca159",
+        "atomB": "at-e61093d2-0a71-4395-a683-6a99bcdf5723"
+      },
+      "L": 1.0000502680869094,
+      "geometry": {
+        "start": {
+          "x": 6.4739769893386185,
+          "y": 47.50771880992671
+        },
+        "control": {
+          "x": 7.145624195592773,
+          "y": 48.14623467190657
+        },
+        "end": {
+          "x": 7.617256568665896,
+          "y": 47.348503275797384
+        },
+        "sourceOk": true,
+        "targetOk": true
+      },
+      "bonds": [
+        {
+          "id": "bd-b8a8b9c1-6866-4d8b-a4f8-31d436d58d3d",
+          "atomIds": [
+            "at-35a772aa-ee01-4338-9e7b-4fcead6f3930",
+            "at-d3e5af87-a135-4d55-b81e-5df8865ca159"
+          ],
+          "a": {
+            "x": 6.041167750466682,
+            "y": 47.257413466836034
+          },
+          "b": {
+            "x": 6.906786228210554,
+            "y": 47.75802415301738
+          }
+        },
+        {
+          "id": "bd-3fe74709-7556-4bd3-909a-4d28eef6ae5c",
+          "atomIds": [
+            "at-d3e5af87-a135-4d55-b81e-5df8865ca159",
+            "at-e61093d2-0a71-4395-a683-6a99bcdf5723"
+          ],
+          "a": {
+            "x": 6.906786228210554,
+            "y": 47.75802415301738
+          },
+          "b": {
+            "x": 7.773204723031824,
+            "y": 47.258613492452106
+          }
+        }
+      ]
+    },
+    {
+      "kind": "afterReopen",
+      "source": {
+        "type": "bond",
+        "bondId": "bd-b8a8b9c1-6866-4d8b-a4f8-31d436d58d3d",
+        "component": "pi"
+      },
+      "target": {
+        "type": "formingBond",
+        "atomA": "at-d3e5af87-a135-4d55-b81e-5df8865ca159",
+        "atomB": "at-e61093d2-0a71-4395-a683-6a99bcdf5723"
+      },
+      "L": 1.0000502680869094,
+      "geometry": {
+        "start": {
+          "x": -4.5584354813168275,
+          "y": -0.6671549719345293
+        },
+        "control": {
+          "x": -3.886788275062672,
+          "y": -0.028639109954666897
+        },
+        "end": {
+          "x": -3.41515590198955,
+          "y": -0.8263705060638553
+        },
+        "sourceOk": true,
+        "targetOk": true
+      },
+      "bonds": [
+        {
+          "id": "bd-b8a8b9c1-6866-4d8b-a4f8-31d436d58d3d",
+          "atomIds": [
+            "at-35a772aa-ee01-4338-9e7b-4fcead6f3930",
+            "at-d3e5af87-a135-4d55-b81e-5df8865ca159"
+          ],
+          "a": {
+            "x": -4.991244720188764,
+            "y": -0.9174603150252025
+          },
+          "b": {
+            "x": -4.125626242444892,
+            "y": -0.4168496288438561
+          }
+        },
+        {
+          "id": "bd-3fe74709-7556-4bd3-909a-4d28eef6ae5c",
+          "atomIds": [
+            "at-d3e5af87-a135-4d55-b81e-5df8865ca159",
+            "at-e61093d2-0a71-4395-a683-6a99bcdf5723"
+          ],
+          "a": {
+            "x": -4.125626242444892,
+            "y": -0.4168496288438561
+          },
+          "b": {
+            "x": -3.2592077476236216,
+            "y": -0.9162602894091307
+          }
+        }
+      ]
+    }
+  ]
+}

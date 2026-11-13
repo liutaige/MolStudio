@@ -1,0 +1,190 @@
+{
+  "application": "MolStudio canvas",
+  "page": "fusion/canvas.html",
+  "sourceArtifact": ".jez/artifacts/thinking-phases-20261113/phases-model-final/completed-context.json",
+  "stepId": "rs-d35b2afb-b026-44a6-a0ff-68ce5c6ac4f2",
+  "input": {
+    "reactantAtoms": [
+      "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9",
+      "at-267f58a2-a267-4168-8877-485a4112f5d8",
+      "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c",
+      "at-236d9af5-9bde-496f-b34c-dd28c6347887",
+      "at-9c5b4dcd-57c5-4ccb-8db9-977cea4e4cf3"
+    ],
+    "productAtoms": [
+      "at-2960d184-423e-43f8-af49-2fe6e337f2e5",
+      "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+      "at-f04f815d-7a7c-43f4-b37e-e86cec89ec0e",
+      "at-4430a20b-411c-4e97-8b08-4b02ce9924e3"
+    ],
+    "atoms": [
+      {
+        "id": "at-267f58a2-a267-4168-8877-485a4112f5d8",
+        "label": "C",
+        "charge": 0,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 3
+      },
+      {
+        "id": "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9",
+        "label": "C",
+        "charge": 0,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 1
+      },
+      {
+        "id": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c",
+        "label": "O",
+        "charge": 0,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 0
+      },
+      {
+        "id": "at-236d9af5-9bde-496f-b34c-dd28c6347887",
+        "label": "O",
+        "charge": 1,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 2
+      },
+      {
+        "id": "at-9c5b4dcd-57c5-4ccb-8db9-977cea4e4cf3",
+        "label": "H",
+        "charge": 0,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 0
+      },
+      {
+        "id": "at-2960d184-423e-43f8-af49-2fe6e337f2e5",
+        "label": "C",
+        "charge": 0,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 3
+      },
+      {
+        "id": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+        "label": "C",
+        "charge": 0,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 1
+      },
+      {
+        "id": "at-f04f815d-7a7c-43f4-b37e-e86cec89ec0e",
+        "label": "O",
+        "charge": 1,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 1
+      },
+      {
+        "id": "at-4430a20b-411c-4e97-8b08-4b02ce9924e3",
+        "label": "O",
+        "charge": 0,
+        "radical": 0,
+        "aromatic": false,
+        "hasQuery": false,
+        "isotope": 0,
+        "implicitH": 2
+      }
+    ],
+    "bonds": [
+      {
+        "id": "bd-20113c4c-5289-4b42-9a3f-2858067ba42f",
+        "begin": "at-267f58a2-a267-4168-8877-485a4112f5d8",
+        "end": "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9",
+        "order": 1,
+        "aromatic": false,
+        "stereo": 0
+      },
+      {
+        "id": "bd-125e5dcb-7ce0-49fc-b10e-9491c9ef9bb3",
+        "begin": "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9",
+        "end": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c",
+        "order": 2,
+        "aromatic": false,
+        "stereo": 0
+      },
+      {
+        "id": "bd-a0193a11-18e5-41d6-bf9f-c54a5e498e80",
+        "begin": "at-236d9af5-9bde-496f-b34c-dd28c6347887",
+        "end": "at-9c5b4dcd-57c5-4ccb-8db9-977cea4e4cf3",
+        "order": 1,
+        "aromatic": false,
+        "stereo": 0
+      },
+      {
+        "id": "bd-4a9e59fe-9c93-4599-a67d-789d422a311e",
+        "begin": "at-2960d184-423e-43f8-af49-2fe6e337f2e5",
+        "end": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+        "order": 1,
+        "aromatic": false,
+        "stereo": 0
+      },
+      {
+        "id": "bd-3640a9ad-20a1-4c5b-8e36-5d990ec72a71",
+        "begin": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+        "end": "at-f04f815d-7a7c-43f4-b37e-e86cec89ec0e",
+        "order": 2,
+        "aromatic": false,
+        "stereo": 0
+      }
+    ],
+    "lonePairs": [
+      {
+        "id": "lp-f7eb0b84-8088-45c3-8d3a-d2bf57ff53f8",
+        "ownerAtomId": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c",
+        "electronCount": 2
+      }
+    ],
+    "arrows": [
+      {
+        "id": "ar-04ed9aed-095f-4543-9bb7-2a800cb9af57",
+        "electronCount": 2,
+        "source": {
+          "type": "lonePair",
+          "ownerAtomId": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c",
+          "slotId": "lp-f7eb0b84-8088-45c3-8d3a-d2bf57ff53f8"
+        },
+        "target": {
+          "type": "atom",
+          "atomId": "at-9c5b4dcd-57c5-4ccb-8db9-977cea4e4cf3"
+        }
+      },
+      {
+        "id": "ar-900484e4-e336-4471-a457-60660357a0f4",
+        "electronCount": 2,
+        "source": {
+          "type": "bond",
+          "bondId": "bd-a0193a11-18e5-41d6-bf9f-c54a5e498e80",
+          "component": "sigma"
+        },
+        "target": {
+          "type": "atom",
+          "atomId": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c"
+        }
+      }
+    ]
+  }
+}

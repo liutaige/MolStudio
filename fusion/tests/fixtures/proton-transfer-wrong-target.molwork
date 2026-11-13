@@ -1,0 +1,1175 @@
+{
+  "format": "molstudio-workbench",
+  "version": 1,
+  "ket": {
+    "ket_version": "2.0.0",
+    "root": {
+      "nodes": [
+        {
+          "$ref": "mol0"
+        },
+        {
+          "$ref": "mol1"
+        },
+        {
+          "$ref": "mol2"
+        },
+        {
+          "$ref": "mol3"
+        },
+        {
+          "$ref": "mol4"
+        },
+        {
+          "$ref": "mol5"
+        },
+        {
+          "$ref": "mol6"
+        },
+        {
+          "$ref": "mol7"
+        },
+        {
+          "type": "arrow",
+          "data": {
+            "mode": "open-angle",
+            "pos": [
+              {
+                "x": 9.216247551377855,
+                "y": -11.812705993652344,
+                "z": 0
+              },
+              {
+                "x": 10.666247551377856,
+                "y": -11.812705993652344,
+                "z": 0
+              }
+            ]
+          }
+        },
+        {
+          "type": "arrow",
+          "data": {
+            "mode": "open-angle",
+            "pos": [
+              {
+                "x": 14.17105970614775,
+                "y": -11.812705993652344,
+                "z": 0
+              },
+              {
+                "x": 15.62105970614775,
+                "y": -11.812705993652344,
+                "z": 0
+              }
+            ]
+          }
+        },
+        {
+          "type": "arrow",
+          "data": {
+            "mode": "open-angle",
+            "pos": [
+              {
+                "x": 19.899327329826836,
+                "y": -11.812705993652344,
+                "z": 0
+              },
+              {
+                "x": 21.34932732982684,
+                "y": -11.812705993652344,
+                "z": 0
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "boundingBox": {
+            "x": 16.759792129798566,
+            "y": -15.288098900123462,
+            "width": 0.8128906250000014,
+            "height": 0.375
+          },
+          "paragraphs": [
+            {
+              "parts": [
+                {
+                  "text": "接 B1"
+                }
+              ],
+              "indent": 0
+            }
+          ],
+          "indent": 0
+        },
+        {
+          "type": "text",
+          "boundingBox": {
+            "x": 11.93537734346536,
+            "y": -14.238098900123461,
+            "width": 0.8128906249999996,
+            "height": 0.375
+          },
+          "paragraphs": [
+            {
+              "parts": [
+                {
+                  "text": "接 B1"
+                }
+              ],
+              "indent": 0
+            }
+          ],
+          "indent": 0
+        }
+      ],
+      "connections": [],
+      "templates": []
+    },
+    "mol0": {
+      "type": "molecule",
+      "atoms": [
+        {
+          "label": "C",
+          "location": [
+            8.416540200520364,
+            -11.56231308718122,
+            0
+          ],
+          "implicitHCount": 3
+        },
+        {
+          "label": "C",
+          "location": [
+            7.550964721920499,
+            -12.063098900123464,
+            0
+          ],
+          "implicitHCount": 1
+        },
+        {
+          "label": "O",
+          "location": [
+            6.684589265983673,
+            -11.563713047520917,
+            0
+          ],
+          "implicitHCount": 0
+        }
+      ],
+      "bonds": [
+        {
+          "type": 1,
+          "atoms": [
+            0,
+            1
+          ]
+        },
+        {
+          "type": 2,
+          "atoms": [
+            1,
+            2
+          ]
+        }
+      ],
+      "stereoFlagPosition": {
+        "x": 8.416540379397636,
+        "y": 10.56231308718122,
+        "z": 0
+      }
+    },
+    "mol1": {
+      "type": "molecule",
+      "atoms": [
+        {
+          "label": "O",
+          "location": [
+            4.086171910572855,
+            -11.563713047520915,
+            0
+          ],
+          "charge": 1,
+          "implicitHCount": 2
+        },
+        {
+          "label": "H",
+          "location": [
+            5.086171910572855,
+            -11.563713047520915,
+            0
+          ],
+          "implicitHCount": 0
+        }
+      ],
+      "bonds": [
+        {
+          "type": 1,
+          "atoms": [
+            0,
+            1
+          ]
+        }
+      ],
+      "stereoFlagPosition": {
+        "x": 5.086172089450127,
+        "y": 10.563713047520915,
+        "z": 0
+      }
+    },
+    "mol2": {
+      "type": "molecule",
+      "atoms": [
+        {
+          "label": "C",
+          "location": [
+            13.371352810733708,
+            -11.56231308718122,
+            0
+          ],
+          "implicitHCount": 3
+        },
+        {
+          "label": "C",
+          "location": [
+            12.505777332133842,
+            -12.063098900123464,
+            0
+          ],
+          "implicitHCount": 1
+        },
+        {
+          "label": "O",
+          "location": [
+            11.639401876197013,
+            -11.563713047520917,
+            0
+          ],
+          "charge": 1,
+          "implicitHCount": 1
+        }
+      ],
+      "bonds": [
+        {
+          "type": 1,
+          "atoms": [
+            0,
+            1
+          ]
+        },
+        {
+          "type": 2,
+          "atoms": [
+            1,
+            2
+          ]
+        }
+      ],
+      "stereoFlagPosition": {
+        "x": 17.17438690417702,
+        "y": 10.56231308718122,
+        "z": 0
+      }
+    },
+    "mol3": {
+      "type": "molecule",
+      "atoms": [
+        {
+          "label": "O",
+          "location": [
+            17.329792129798566,
+            -14.313510027914587,
+            0
+          ],
+          "implicitHCount": 2
+        }
+      ],
+      "stereoFlagPosition": {
+        "x": 11.514957702636718,
+        "y": 11.063098900123466,
+        "z": 0
+      }
+    },
+    "mol4": {
+      "type": "molecule",
+      "atoms": [
+        {
+          "label": "C",
+          "location": [
+            11.505777332133842,
+            -13.313098900123462,
+            0
+          ],
+          "implicitHCount": 3
+        },
+        {
+          "label": "O",
+          "location": [
+            12.505777332133839,
+            -13.313098900123462,
+            0
+          ],
+          "implicitHCount": 1
+        }
+      ],
+      "bonds": [
+        {
+          "type": 1,
+          "atoms": [
+            0,
+            1
+          ]
+        }
+      ],
+      "stereoFlagPosition": {
+        "x": 16.308811425577154,
+        "y": 12.313098900123462,
+        "z": 0
+      }
+    },
+    "mol5": {
+      "type": "molecule",
+      "atoms": [
+        {
+          "label": "C",
+          "location": [
+            19.059797709646407,
+            -12.060106791602834,
+            0
+          ],
+          "implicitHCount": 3
+        },
+        {
+          "label": "C",
+          "location": [
+            18.192794913271786,
+            -11.561905184735675,
+            0
+          ],
+          "implicitHCount": 1
+        },
+        {
+          "label": "O",
+          "location": [
+            18.190594906176035,
+            -10.561901959390099,
+            0
+          ],
+          "implicitHCount": 1
+        },
+        {
+          "label": "O",
+          "location": [
+            17.3275921227028,
+            -12.063506802569009,
+            0
+          ],
+          "charge": 1,
+          "implicitHCount": 0
+        },
+        {
+          "label": "H",
+          "location": [
+            17.329792129798566,
+            -13.063510027914589,
+            0
+          ],
+          "implicitHCount": 0
+        },
+        {
+          "label": "C",
+          "location": [
+            16.46058932632818,
+            -11.56530519570185,
+            0
+          ],
+          "implicitHCount": 3
+        }
+      ],
+      "bonds": [
+        {
+          "type": 1,
+          "atoms": [
+            0,
+            1
+          ]
+        },
+        {
+          "type": 1,
+          "atoms": [
+            1,
+            2
+          ]
+        },
+        {
+          "type": 1,
+          "atoms": [
+            1,
+            3
+          ]
+        },
+        {
+          "type": 1,
+          "atoms": [
+            3,
+            4
+          ]
+        },
+        {
+          "type": 1,
+          "atoms": [
+            3,
+            5
+          ]
+        }
+      ],
+      "stereoFlagPosition": {
+        "x": 22.862832270390136,
+        "y": 9.561901959390099,
+        "z": 0
+      }
+    },
+    "mol6": {
+      "type": "molecule",
+      "atoms": [
+        {
+          "label": "C",
+          "location": [
+            24.78798221500846,
+            -12.560141868074606,
+            0
+          ],
+          "implicitHCount": 3
+        },
+        {
+          "label": "C",
+          "location": [
+            23.920940599910647,
+            -12.061917954993028,
+            0
+          ],
+          "implicitHCount": 1
+        },
+        {
+          "label": "O",
+          "location": [
+            23.918940503912733,
+            -11.061869956033618,
+            0
+          ],
+          "implicitHCount": 1
+        },
+        {
+          "label": "O",
+          "location": [
+            23.055899080810757,
+            -12.56354203127107,
+            0
+          ],
+          "implicitHCount": 0
+        },
+        {
+          "label": "C",
+          "location": [
+            22.188857465712953,
+            -12.065318118189488,
+            0
+          ],
+          "implicitHCount": 3
+        }
+      ],
+      "bonds": [
+        {
+          "type": 1,
+          "atoms": [
+            0,
+            1
+          ]
+        },
+        {
+          "type": 1,
+          "atoms": [
+            1,
+            2
+          ]
+        },
+        {
+          "type": 1,
+          "atoms": [
+            1,
+            3
+          ]
+        },
+        {
+          "type": 1,
+          "atoms": [
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    "mol7": {
+      "type": "molecule",
+      "atoms": [
+        {
+          "label": "O",
+          "location": [
+            26.276223111854396,
+            -11.812705993652344,
+            0
+          ],
+          "charge": 1,
+          "implicitHCount": 2
+        },
+        {
+          "label": "H",
+          "location": [
+            27.276223111854396,
+            -11.812705993652344,
+            0
+          ],
+          "implicitHCount": 0
+        }
+      ],
+      "bonds": [
+        {
+          "type": 1,
+          "atoms": [
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  },
+  "bindings": {
+    "atoms": [
+      {
+        "id": "at-267f58a2-a267-4168-8877-485a4112f5d8",
+        "mol": "mol0",
+        "index": 0
+      },
+      {
+        "id": "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9",
+        "mol": "mol0",
+        "index": 1
+      },
+      {
+        "id": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c",
+        "mol": "mol0",
+        "index": 2
+      },
+      {
+        "id": "at-236d9af5-9bde-496f-b34c-dd28c6347887",
+        "mol": "mol1",
+        "index": 0
+      },
+      {
+        "id": "at-9c5b4dcd-57c5-4ccb-8db9-977cea4e4cf3",
+        "mol": "mol1",
+        "index": 1
+      },
+      {
+        "id": "at-2960d184-423e-43f8-af49-2fe6e337f2e5",
+        "mol": "mol2",
+        "index": 0
+      },
+      {
+        "id": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+        "mol": "mol2",
+        "index": 1
+      },
+      {
+        "id": "at-f04f815d-7a7c-43f4-b37e-e86cec89ec0e",
+        "mol": "mol2",
+        "index": 2
+      },
+      {
+        "id": "at-4430a20b-411c-4e97-8b08-4b02ce9924e3",
+        "mol": "mol3",
+        "index": 0
+      },
+      {
+        "id": "at-8e8ef12f-0132-42d9-a246-fee5cd05b1b2",
+        "mol": "mol4",
+        "index": 0
+      },
+      {
+        "id": "at-45929424-8987-4500-951f-c19250d6103a",
+        "mol": "mol4",
+        "index": 1
+      },
+      {
+        "id": "at-686d350a-eb79-49e6-88da-93097d0756f6",
+        "mol": "mol5",
+        "index": 0
+      },
+      {
+        "id": "at-6d1c256f-391c-4e49-bd0d-bf1adf013b6b",
+        "mol": "mol5",
+        "index": 1
+      },
+      {
+        "id": "at-d8b1ce0f-73e3-4b84-8195-b7ac191e7038",
+        "mol": "mol5",
+        "index": 2
+      },
+      {
+        "id": "at-3736fc94-9337-4cdc-9a2a-75d4b7820190",
+        "mol": "mol5",
+        "index": 3
+      },
+      {
+        "id": "at-f3f76ae0-f042-4315-9919-c9256ea9ecf8",
+        "mol": "mol5",
+        "index": 4
+      },
+      {
+        "id": "at-1a0eb9f5-e25c-47a6-af0b-26cf1571f4ff",
+        "mol": "mol5",
+        "index": 5
+      },
+      {
+        "id": "at-90f33380-88fc-4c61-83cf-694eea73d397",
+        "mol": "mol6",
+        "index": 0
+      },
+      {
+        "id": "at-ef5e4ed3-203a-4046-a965-c64d5bab75ad",
+        "mol": "mol6",
+        "index": 1
+      },
+      {
+        "id": "at-326b9705-9184-43ae-b953-2d24ce5e8804",
+        "mol": "mol6",
+        "index": 2
+      },
+      {
+        "id": "at-2eda43fe-3106-4269-b14e-e4621372d136",
+        "mol": "mol6",
+        "index": 3
+      },
+      {
+        "id": "at-3b28faef-eed4-4023-85bc-95e4da8ae4bc",
+        "mol": "mol6",
+        "index": 4
+      },
+      {
+        "id": "at-8c9d9a31-3c5f-456b-a5de-625b3f932a6c",
+        "mol": "mol7",
+        "index": 0
+      },
+      {
+        "id": "at-3bd99ef9-e9fe-42e2-8ee0-aa1906c22fcc",
+        "mol": "mol7",
+        "index": 1
+      }
+    ],
+    "bonds": [
+      {
+        "id": "bd-20113c4c-5289-4b42-9a3f-2858067ba42f",
+        "mol": "mol0",
+        "index": 0,
+        "begin": "at-267f58a2-a267-4168-8877-485a4112f5d8",
+        "end": "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9"
+      },
+      {
+        "id": "bd-125e5dcb-7ce0-49fc-b10e-9491c9ef9bb3",
+        "mol": "mol0",
+        "index": 1,
+        "begin": "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9",
+        "end": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c"
+      },
+      {
+        "id": "bd-a0193a11-18e5-41d6-bf9f-c54a5e498e80",
+        "mol": "mol1",
+        "index": 0,
+        "begin": "at-236d9af5-9bde-496f-b34c-dd28c6347887",
+        "end": "at-9c5b4dcd-57c5-4ccb-8db9-977cea4e4cf3"
+      },
+      {
+        "id": "bd-4a9e59fe-9c93-4599-a67d-789d422a311e",
+        "mol": "mol2",
+        "index": 0,
+        "begin": "at-2960d184-423e-43f8-af49-2fe6e337f2e5",
+        "end": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829"
+      },
+      {
+        "id": "bd-3640a9ad-20a1-4c5b-8e36-5d990ec72a71",
+        "mol": "mol2",
+        "index": 1,
+        "begin": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+        "end": "at-f04f815d-7a7c-43f4-b37e-e86cec89ec0e"
+      },
+      {
+        "id": "bd-056cb029-c9f5-431b-9d60-59641b241bf5",
+        "mol": "mol4",
+        "index": 0,
+        "begin": "at-8e8ef12f-0132-42d9-a246-fee5cd05b1b2",
+        "end": "at-45929424-8987-4500-951f-c19250d6103a"
+      },
+      {
+        "id": "bd-1a6c629d-e3d5-411e-8f3e-01bb9c13b957",
+        "mol": "mol5",
+        "index": 0,
+        "begin": "at-686d350a-eb79-49e6-88da-93097d0756f6",
+        "end": "at-6d1c256f-391c-4e49-bd0d-bf1adf013b6b"
+      },
+      {
+        "id": "bd-61d95128-2370-44b2-b3c3-b8b4a2a0c2dc",
+        "mol": "mol5",
+        "index": 1,
+        "begin": "at-6d1c256f-391c-4e49-bd0d-bf1adf013b6b",
+        "end": "at-d8b1ce0f-73e3-4b84-8195-b7ac191e7038"
+      },
+      {
+        "id": "bd-eb37ad4b-99ee-4dff-92eb-794a900f714b",
+        "mol": "mol5",
+        "index": 2,
+        "begin": "at-6d1c256f-391c-4e49-bd0d-bf1adf013b6b",
+        "end": "at-3736fc94-9337-4cdc-9a2a-75d4b7820190"
+      },
+      {
+        "id": "bd-89b18c6b-c36e-45dc-9fd5-530896ebe0d2",
+        "mol": "mol5",
+        "index": 3,
+        "begin": "at-3736fc94-9337-4cdc-9a2a-75d4b7820190",
+        "end": "at-f3f76ae0-f042-4315-9919-c9256ea9ecf8"
+      },
+      {
+        "id": "bd-eed15875-72f2-480f-9536-0af64abfe8f4",
+        "mol": "mol5",
+        "index": 4,
+        "begin": "at-3736fc94-9337-4cdc-9a2a-75d4b7820190",
+        "end": "at-1a0eb9f5-e25c-47a6-af0b-26cf1571f4ff"
+      },
+      {
+        "id": "bd-0d57ae3e-c112-4cfb-9f09-60d90b8eaa6b",
+        "mol": "mol6",
+        "index": 0,
+        "begin": "at-90f33380-88fc-4c61-83cf-694eea73d397",
+        "end": "at-ef5e4ed3-203a-4046-a965-c64d5bab75ad"
+      },
+      {
+        "id": "bd-cdac5a93-e116-434d-86de-11d2e93f51a9",
+        "mol": "mol6",
+        "index": 1,
+        "begin": "at-ef5e4ed3-203a-4046-a965-c64d5bab75ad",
+        "end": "at-326b9705-9184-43ae-b953-2d24ce5e8804"
+      },
+      {
+        "id": "bd-52857525-73bc-48a1-b812-f823006a2b3a",
+        "mol": "mol6",
+        "index": 2,
+        "begin": "at-ef5e4ed3-203a-4046-a965-c64d5bab75ad",
+        "end": "at-2eda43fe-3106-4269-b14e-e4621372d136"
+      },
+      {
+        "id": "bd-07e9387a-bde4-48cc-a87b-ca872cf5b3a9",
+        "mol": "mol6",
+        "index": 3,
+        "begin": "at-2eda43fe-3106-4269-b14e-e4621372d136",
+        "end": "at-3b28faef-eed4-4023-85bc-95e4da8ae4bc"
+      },
+      {
+        "id": "bd-eadd5e72-015d-43e5-8340-f9775592499b",
+        "mol": "mol7",
+        "index": 0,
+        "begin": "at-8c9d9a31-3c5f-456b-a5de-625b3f932a6c",
+        "end": "at-3bd99ef9-e9fe-42e2-8ee0-aa1906c22fcc"
+      }
+    ]
+  },
+  "mechanism": {
+    "lonePairs": [
+      {
+        "id": "lp-f7eb0b84-8088-45c3-8d3a-d2bf57ff53f8",
+        "ownerAtomId": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c",
+        "origin": "manual",
+        "electronCount": 2,
+        "angle": 180,
+        "radius": 0.42,
+        "refAtomId": "at-9c5b4dcd-57c5-4ccb-8db9-977cea4e4cf3",
+        "angleRel": 0,
+        "visible": true
+      },
+      {
+        "id": "lp-0ae4f53d-ee1d-437b-82d3-6882e48ce64c",
+        "ownerAtomId": "at-45929424-8987-4500-951f-c19250d6103a",
+        "origin": "manual",
+        "electronCount": 2,
+        "angle": 270,
+        "radius": 0.42,
+        "refAtomId": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+        "angleRel": 0,
+        "visible": true
+      },
+      {
+        "id": "lp-9f76fe2f-6cb9-4ac0-9adc-dbd7957ede27",
+        "ownerAtomId": "at-4430a20b-411c-4e97-8b08-4b02ce9924e3",
+        "origin": "manual",
+        "electronCount": 2,
+        "angle": 5.938316,
+        "radius": 0.42,
+        "refAtomId": "at-f3f76ae0-f042-4315-9919-c9256ea9ecf8",
+        "angleRel": 0,
+        "visible": true
+      }
+    ],
+    "arrows": [
+      {
+        "id": "ar-04ed9aed-095f-4543-9bb7-2a800cb9af57",
+        "electronCount": 2,
+        "source": {
+          "type": "lonePair",
+          "ownerAtomId": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c",
+          "slotId": "lp-f7eb0b84-8088-45c3-8d3a-d2bf57ff53f8"
+        },
+        "target": {
+          "type": "atom",
+          "atomId": "at-9c5b4dcd-57c5-4ccb-8db9-977cea4e4cf3"
+        },
+        "geometry": {
+          "bend": 0.60721,
+          "mode": "auto",
+          "routeVersion": 4
+        },
+        "stepId": "step-1",
+        "pairId": null
+      },
+      {
+        "id": "ar-900484e4-e336-4471-a457-60660357a0f4",
+        "electronCount": 2,
+        "source": {
+          "type": "bond",
+          "bondId": "bd-a0193a11-18e5-41d6-bf9f-c54a5e498e80",
+          "component": "sigma"
+        },
+        "target": {
+          "type": "atom",
+          "atomId": "at-e346605e-d6c4-48c1-9ecf-1ef219debd1c"
+        },
+        "geometry": {
+          "bend": -0.5,
+          "mode": "auto",
+          "routeVersion": 4
+        },
+        "stepId": "step-1",
+        "pairId": null
+      },
+      {
+        "id": "ar-84525ca4-73fd-44c4-8664-11c11d26f9f7",
+        "electronCount": 2,
+        "source": {
+          "type": "lonePair",
+          "ownerAtomId": "at-45929424-8987-4500-951f-c19250d6103a",
+          "slotId": "lp-0ae4f53d-ee1d-437b-82d3-6882e48ce64c"
+        },
+        "target": {
+          "type": "formingBond",
+          "atomA": "at-45929424-8987-4500-951f-c19250d6103a",
+          "atomB": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829"
+        },
+        "geometry": {
+          "bend": 0.682595,
+          "mode": "auto",
+          "routeVersion": 4
+        },
+        "stepId": "step-1",
+        "pairId": null
+      },
+      {
+        "id": "ar-52062f33-e8a0-4a61-a5af-87d26f757e79",
+        "electronCount": 2,
+        "source": {
+          "type": "bond",
+          "bondId": "bd-3640a9ad-20a1-4c5b-8e36-5d990ec72a71",
+          "component": "pi"
+        },
+        "target": {
+          "type": "atom",
+          "atomId": "at-f04f815d-7a7c-43f4-b37e-e86cec89ec0e"
+        },
+        "geometry": {
+          "bend": 2,
+          "mode": "auto",
+          "routeVersion": 4
+        },
+        "stepId": "step-1",
+        "pairId": null
+      },
+      {
+        "id": "ar-f3436926-36cf-4ff8-bb75-d9e89f3c03db",
+        "electronCount": 2,
+        "source": {
+          "type": "lonePair",
+          "ownerAtomId": "at-4430a20b-411c-4e97-8b08-4b02ce9924e3",
+          "slotId": "lp-9f76fe2f-6cb9-4ac0-9adc-dbd7957ede27"
+        },
+        "target": {
+          "type": "atom",
+          "atomId": "at-f3f76ae0-f042-4315-9919-c9256ea9ecf8"
+        },
+        "geometry": {
+          "bend": 0.547945,
+          "mode": "auto",
+          "routeVersion": 4
+        },
+        "stepId": "step-1",
+        "pairId": null
+      },
+      {
+        "id": "ar-ff79bfde-4cb9-4f57-a89f-b64c68216c57",
+        "electronCount": 2,
+        "source": {
+          "type": "bond",
+          "bondId": "bd-89b18c6b-c36e-45dc-9fd5-530896ebe0d2",
+          "component": "sigma"
+        },
+        "target": {
+          "type": "atom",
+          "atomId": "at-3736fc94-9337-4cdc-9a2a-75d4b7820190"
+        },
+        "geometry": {
+          "bend": -1.999989,
+          "mode": "auto",
+          "routeVersion": 4
+        },
+        "stepId": "step-1",
+        "pairId": null
+      }
+    ],
+    "steps": [
+      {
+        "id": "step-1",
+        "label": "步骤 1"
+      }
+    ]
+  },
+  "reactionSteps": [
+    {
+      "arrow": 8,
+      "stepId": "rs-d35b2afb-b026-44a6-a0ff-68ce5c6ac4f2",
+      "version": 1,
+      "reactants": [
+        "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9",
+        "at-236d9af5-9bde-496f-b34c-dd28c6347887"
+      ],
+      "products": [
+        "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+        "at-4430a20b-411c-4e97-8b08-4b02ce9924e3"
+      ],
+      "layout": {},
+      "flow": {
+        "reading": true,
+        "forward": true,
+        "axis": "x",
+        "direction": 1,
+        "graph": true,
+        "routeId": "rs-553e1d22-531c-4794-8633-26f2467b1bd5:route-1",
+        "laneId": "rs-553e1d22-531c-4794-8633-26f2467b1bd5:route-1-path-1",
+        "rowLeft": 3.4374615978561263,
+        "rowWidth": 37,
+        "rowY": 11.812705993652344,
+        "rowBottom": 15.863098900123461,
+        "rowRight": 13.97105970614775,
+        "steps": 1,
+        "arrowStartX": 9.216247551377855,
+        "arrowStartY": 11.812705993652344,
+        "arrowEndX": 10.666247551377856,
+        "arrowEndY": 11.812705993652344,
+        "anchors": [
+          {
+            "atomId": "at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9",
+            "x": 7.550964721920499,
+            "y": 12.063098900123464
+          },
+          {
+            "atomId": "at-236d9af5-9bde-496f-b34c-dd28c6347887",
+            "x": 4.086171910572855,
+            "y": 11.563713047520915
+          },
+          {
+            "atomId": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+            "x": 12.505777332133842,
+            "y": 12.063098900123464
+          },
+          {
+            "atomId": "at-4430a20b-411c-4e97-8b08-4b02ce9924e3",
+            "x": 17.329792129798566,
+            "y": 14.313510027914587
+          }
+        ]
+      },
+      "labels": [
+        {
+          "node": 12,
+          "role": "graphPort",
+          "text": "接 B1",
+          "token": "接 B1",
+          "kind": "reuse",
+          "side": "target",
+          "at": "port",
+          "anchorRefs": [
+            "at-4430a20b-411c-4e97-8b08-4b02ce9924e3"
+          ],
+          "layoutX": 11.93537734346536,
+          "layoutY": 14.238098900123461
+        }
+      ]
+    },
+    {
+      "arrow": 9,
+      "stepId": "rs-553e1d22-531c-4794-8633-26f2467b1bd5",
+      "version": 1,
+      "reactants": [
+        "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+        "at-45929424-8987-4500-951f-c19250d6103a"
+      ],
+      "products": [
+        "at-6d1c256f-391c-4e49-bd0d-bf1adf013b6b"
+      ],
+      "layout": {},
+      "flow": {
+        "reading": true,
+        "forward": true,
+        "axis": "x",
+        "direction": 1,
+        "graph": true,
+        "routeId": "rs-553e1d22-531c-4794-8633-26f2467b1bd5:route-1",
+        "laneId": "rs-553e1d22-531c-4794-8633-26f2467b1bd5:route-1-path-1",
+        "rowLeft": 3.4374615978561263,
+        "rowWidth": 37,
+        "rowY": 11.812705993652344,
+        "rowBottom": 15.863098900123461,
+        "rowRight": 19.699327329826836,
+        "steps": 2,
+        "arrowStartX": 14.17105970614775,
+        "arrowStartY": 11.812705993652344,
+        "arrowEndX": 15.62105970614775,
+        "arrowEndY": 11.812705993652344,
+        "anchors": [
+          {
+            "atomId": "at-32bbe842-3bcf-4fe1-a72f-711ffac01829",
+            "x": 12.505777332133842,
+            "y": 12.063098900123464
+          },
+          {
+            "atomId": "at-45929424-8987-4500-951f-c19250d6103a",
+            "x": 12.505777332133839,
+            "y": 13.313098900123462
+          },
+          {
+            "atomId": "at-6d1c256f-391c-4e49-bd0d-bf1adf013b6b",
+            "x": 18.192794913271786,
+            "y": 11.561905184735675
+          }
+        ]
+      }
+    },
+    {
+      "arrow": 10,
+      "stepId": "rs-96f92511-cfd2-4730-98a0-1a9beeda6364",
+      "version": 1,
+      "reactants": [
+        "at-3736fc94-9337-4cdc-9a2a-75d4b7820190",
+        "at-4430a20b-411c-4e97-8b08-4b02ce9924e3"
+      ],
+      "products": [
+        "at-ef5e4ed3-203a-4046-a965-c64d5bab75ad",
+        "at-8c9d9a31-3c5f-456b-a5de-625b3f932a6c"
+      ],
+      "layout": {},
+      "flow": {
+        "reading": true,
+        "forward": true,
+        "axis": "x",
+        "direction": 1,
+        "graph": true,
+        "routeId": "rs-553e1d22-531c-4794-8633-26f2467b1bd5:route-1",
+        "laneId": "rs-553e1d22-531c-4794-8633-26f2467b1bd5:route-1-path-1",
+        "rowLeft": 3.4374615978561263,
+        "rowWidth": 37,
+        "rowY": 11.812705993652344,
+        "rowBottom": 15.863098900123461,
+        "rowRight": 27.924933872814215,
+        "steps": 3,
+        "arrowStartX": 19.899327329826836,
+        "arrowStartY": 11.812705993652344,
+        "arrowEndX": 21.34932732982684,
+        "arrowEndY": 11.812705993652344,
+        "anchors": [
+          {
+            "atomId": "at-3736fc94-9337-4cdc-9a2a-75d4b7820190",
+            "x": 17.3275921227028,
+            "y": 12.063506802569009
+          },
+          {
+            "atomId": "at-4430a20b-411c-4e97-8b08-4b02ce9924e3",
+            "x": 17.329792129798566,
+            "y": 14.313510027914587
+          },
+          {
+            "atomId": "at-ef5e4ed3-203a-4046-a965-c64d5bab75ad",
+            "x": 23.920940599910647,
+            "y": 12.061917954993028
+          },
+          {
+            "atomId": "at-8c9d9a31-3c5f-456b-a5de-625b3f932a6c",
+            "x": 26.276223111854396,
+            "y": 11.812705993652344
+          }
+        ]
+      },
+      "labels": [
+        {
+          "node": 11,
+          "role": "graphPort",
+          "text": "接 B1",
+          "token": "接 B1",
+          "kind": "reuse",
+          "side": "source",
+          "at": "molecule",
+          "anchorRefs": [
+            "at-4430a20b-411c-4e97-8b08-4b02ce9924e3"
+          ],
+          "layoutX": 16.759792129798566,
+          "layoutY": 15.288098900123462,
+          "anchorDx": -0.5700000000000003,
+          "anchorDy": 0.9745888722088747
+        }
+      ]
+    }
+  ],
+  "reactionStepOperations": [
+    {
+      "id": "s1",
+      "type": "reactionStep.create",
+      "signature": "{\"id\":\"s1\",\"layout\":{},\"products\":[\"prot:2\",\"w1:1\"],\"reactants\":[\"ald:2\",\"h3o:1\"],\"type\":\"reactionStep.create\"}",
+      "resolvedSignature": "{\"id\":\"s1\",\"layout\":{},\"products\":[\"at-32bbe842-3bcf-4fe1-a72f-711ffac01829\",\"at-4430a20b-411c-4e97-8b08-4b02ce9924e3\"],\"reactants\":[\"at-0fc474f9-0c6c-4b2c-ac42-bb28fbdc2ea9\",\"at-236d9af5-9bde-496f-b34c-dd28c6347887\"],\"type\":\"reactionStep.create\"}",
+      "stepId": "rs-d35b2afb-b026-44a6-a0ff-68ce5c6ac4f2",
+      "version": 1,
+      "action": "create"
+    },
+    {
+      "id": "s2",
+      "type": "reactionStep.create",
+      "signature": "{\"id\":\"s2\",\"layout\":{},\"products\":[\"oxo:2\"],\"reactants\":[\"prot:2\",\"meoh:2\"],\"type\":\"reactionStep.create\"}",
+      "resolvedSignature": "{\"id\":\"s2\",\"layout\":{},\"products\":[\"at-6d1c256f-391c-4e49-bd0d-bf1adf013b6b\"],\"reactants\":[\"at-32bbe842-3bcf-4fe1-a72f-711ffac01829\",\"at-45929424-8987-4500-951f-c19250d6103a\"],\"type\":\"reactionStep.create\"}",
+      "stepId": "rs-553e1d22-531c-4794-8633-26f2467b1bd5",
+      "version": 1,
+      "action": "create"
+    },
+    {
+      "id": "rs3",
+      "type": "reactionStep.create",
+      "signature": "{\"id\":\"rs3\",\"layout\":{},\"products\":[\"hemi:2\",\"hyd:1\"],\"reactants\":[\"at-3736fc94-9337-4cdc-9a2a-75d4b7820190\",\"at-4430a20b-411c-4e97-8b08-4b02ce9924e3\"],\"type\":\"reactionStep.create\"}",
+      "resolvedSignature": "{\"id\":\"rs3\",\"layout\":{},\"products\":[\"at-ef5e4ed3-203a-4046-a965-c64d5bab75ad\",\"at-8c9d9a31-3c5f-456b-a5de-625b3f932a6c\"],\"reactants\":[\"at-3736fc94-9337-4cdc-9a2a-75d4b7820190\",\"at-4430a20b-411c-4e97-8b08-4b02ce9924e3\"],\"type\":\"reactionStep.create\"}",
+      "stepId": "rs-96f92511-cfd2-4730-98a0-1a9beeda6364",
+      "version": 1,
+      "action": "create"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "molstudio-agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test tests/runtime*.mjs tests/decoder*.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@mdit/plugin-katex": "1.1.5",
+    "katex": "0.19.1",
+    "markdown-it": "15.0.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

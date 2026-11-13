@@ -1,0 +1,117 @@
+[
+ {
+  "id": "M01",
+  "file": "M01.ket",
+  "note": "新戊烷 | CC(C)(C)C"
+ },
+ {
+  "id": "M02",
+  "file": "M02.ket",
+  "note": "未指定四面体 | FC(Cl)(Br)I"
+ },
+ {
+  "id": "M03",
+  "file": "M03.ket",
+  "note": "已指定四面体 S | F[C@](Cl)(Br)I"
+ },
+ {
+  "id": "M04",
+  "file": "M04.ket",
+  "note": "已指定四面体 R | F[C@@](Cl)(Br)I"
+ },
+ {
+  "id": "M05",
+  "file": "M05.ket",
+  "note": "隐含氢的手性中心 | C[C@H](O)CC"
+ },
+ {
+  "id": "M06",
+  "file": "M06.ket",
+  "note": "两个已指定中心 | C[C@H](F)[C@@H](Cl)C"
+ },
+ {
+  "id": "M07",
+  "file": "M07.ket",
+  "note": "E 双键 | C/C=C/C"
+ },
+ {
+  "id": "M08",
+  "file": "M08.ket",
+  "note": "Z 双键 | C/C=C\\C"
+ },
+ {
+  "id": "M09",
+  "file": "M09.ket",
+  "note": "未指定双键 | CC=CC"
+ },
+ {
+  "id": "M10",
+  "file": "M10.ket",
+  "note": "含同位素的手性中心 | [2H][C@](F)(Cl)Br"
+ },
+ {
+  "id": "M11",
+  "file": "M11.ket",
+  "note": "OR 组 | C[C@H](O)[C@H](F)Cl |o1:1,3|"
+ },
+ {
+  "id": "M12",
+  "file": "M12.ket",
+  "note": "AND 组 | C[C@H](O)[C@H](F)Cl |&1:1,3|"
+ },
+ {
+  "id": "R01",
+  "file": "R01.ket",
+  "note": "顺式二甲基环己烷（环上立体） | C[C@H]1CC[C@@H](C)CC1"
+ },
+ {
+  "id": "R02",
+  "file": "R02.ket",
+  "note": "顺式十氢萘（稠环） | C1CC[C@H]2CCCC[C@H]2C1"
+ },
+ {
+  "id": "D11",
+  "file": "D11.ket",
+  "note": "同分子含已指定与未指定中心 | C[C@H](O)C(F)(Cl)Br"
+ },
+ {
+  "id": "W01",
+  "file": "W01.ket",
+  "note": "M02 中心显式波浪键（未知）"
+ },
+ {
+  "id": "W02",
+  "file": "W02.ket",
+  "note": "新戊烷 + 人为楔键 + ABS（不得据此判定手性）"
+ },
+ {
+  "id": "W03",
+  "file": "W03.ket",
+  "note": "双键共线画法（构型未确定）"
+ },
+ {
+  "id": "W06",
+  "file": "W06.ket",
+  "note": "交叉双键（E/Z 显式未知）"
+ },
+ {
+  "id": "W04",
+  "file": "W04.ket",
+  "note": "四取代一实一虚 S（甲基实心 / F 虚线）"
+ },
+ {
+  "id": "W05",
+  "file": "W05.ket",
+  "note": "四取代一实一虚 R（F 实心 / 甲基虚线）"
+ },
+ {
+  "id": "C01",
+  "file": "C01.ket",
+  "note": "M02 + M03 + 文字 + 箭头 + 图形"
+ },
+ {
+  "id": "C02",
+  "file": "C02.ket",
+  "note": "两个相同实例 + 乙醇"
+ }
+]

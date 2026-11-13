@@ -1,0 +1,14 @@
+- insert:
+    - id: molstudio-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: molstudio
+        transport: stdio
+        command: /Users/tiger/MolStudio/.venv-rdkit/bin/python
+        args:
+          - '-B'
+          - /Users/tiger/MolStudio/fusion/mcp_server.py
+        cwd: /Users/tiger/MolStudio
+        startupTimeoutMs: 60000
+        toolCallTimeoutMs: 180000
+        failOnStartupError: false

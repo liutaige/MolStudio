@@ -1,0 +1,31 @@
+{
+  "ket": "{\n    \"ket_version\": \"2.0.0\",\n    \"root\": {\n        \"nodes\": [\n            {\n                \"$ref\": \"mol0\"\n            }\n        ],\n        \"connections\": [],\n        \"templates\": []\n    },\n    \"mol0\": {\n        \"type\": \"molecule\",\n        \"atoms\": [\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    14.700000000000001,\n                    -9.324942538240233,\n                    0\n                ],\n                \"charge\": 1\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    14.158417960420813,\n                    -10.26301766453213,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    15.241582039579189,\n                    -10.26301766453213,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    14.700000000000001,\n                    -8.574482437206717,\n                    0\n                ]\n            }\n        ],\n        \"bonds\": [\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    0,\n                    1\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    1,\n                    2\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    2,\n                    0\n                ]\n            },\n            {\n                \"type\": 1,\n                \"atoms\": [\n                    0,\n                    3\n                ]\n            }\n        ],\n        \"stereoFlagPosition\": {\n            \"x\": 15.241582039579189,\n            \"y\": 7.574482437206716,\n            \"z\": 0\n        }\n    }\n}",
+  "mol": "\n  -INDIGO-11012618032D\n\n  4  4  0  0  0  0  0  0  0  0999 V2000\n   14.7000   -9.3249    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   14.1584  -10.2630    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   15.2416  -10.2630    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   14.7000   -8.5745    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n  1  2  4  0  0  0  0\n  2  3  4  0  0  0  0\n  3  1  4  0  0  0  0\n  1  4  1  0  0  0  0\nM  CHG  1   1   1\nM  END\n",
+  "smiles": "[c+]1(C)cc1",
+  "atoms": [
+    {
+      "id": 0,
+      "label": "C",
+      "charge": 1,
+      "implicitH": 0
+    },
+    {
+      "id": 1,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 2,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 3,
+      "label": "C",
+      "charge": null,
+      "implicitH": 3
+    }
+  ]
+}

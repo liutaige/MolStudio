@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "MolStudio 画布",
+    "description": "在实时 MolStudio 画布上绘制与核对分子、反应步骤、孤对电子和弯箭头电子流；每次修改都提交为可编辑对象，并在 MolStudio 右侧面板显示协同明细。",
+    "detail": "docs/DETAIL.md"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "molstudio-canvas",
+  "private": true,
+  "productName": "MolStudio",
+  "version": "0.4.0",
+  "description": "MolStudio 化学画布、原生应用构建与本地回归工具",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node scripts/start-server.cjs",
+    "build": "npm run build:native --",
+    "build:native": "bash ../fusion-native/build-app.sh",
+    "build:agent": "npm --prefix agent run build",
+    "dist": "npm run build:native --",
+    "test": "npm run test:unit",
+    "test:unit": "npm --prefix agent test && node --test agent/tests/panel.test.cjs tests/test_agent_app.cjs tests/test_agent_bridge.cjs tests/test_agent_batch_regressions.cjs tests/test_agent_edit_operations.cjs tests/test_lone_pair_aim.cjs tests/test_reaction_step_operations.cjs tests/test_reaction_graph_layout.cjs tests/test_reaction_reagent_placement.cjs tests/test_reaction_curve_readability.cjs tests/test_reaction_curve_refinement.cjs tests/test_reaction_curve_minimum.cjs tests/test_reaction_route_preservation.cjs tests/test_agent_reading_viewport.cjs tests/test_reaction_forming_bond_contact.cjs tests/test_reaction_graph_storage.cjs tests/test_mechanism_export.cjs tests/test_agent_long_route_fixtures.cjs tests/test_agent_long_route_probe.cjs tests/test_agent_robinson_audit.cjs tests/test_mechanism_ui_label_safety.cjs tests/test_workbench_boundary_regressions.cjs tests/test_ketcher_glyph_bbox.cjs tests/test_agent_selection_dirty.cjs tests/test_agent_task_storage.cjs tests/test_workbench_storage_safety.cjs tests/test_canvas_viewport.cjs"
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "jsdom": "27.3.0"
+  }
+}

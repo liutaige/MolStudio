@@ -1,0 +1,25 @@
+{
+  "ket": "{\n    \"ket_version\": \"2.0.0\",\n    \"root\": {\n        \"nodes\": [\n            {\n                \"$ref\": \"mol0\"\n            }\n        ],\n        \"connections\": [],\n        \"templates\": []\n    },\n    \"mol0\": {\n        \"type\": \"molecule\",\n        \"atoms\": [\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    14.199999809265137,\n                    -8.798236846923828,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    15.199999809265137,\n                    -8.798236846923828,\n                    0\n                ]\n            },\n            {\n                \"label\": \"C\",\n                \"location\": [\n                    14.699999809265137,\n                    -9.664262771606445,\n                    0\n                ],\n                \"charge\": 1,\n                \"implicitHCount\": 1\n            }\n        ],\n        \"bonds\": [\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    0,\n                    1\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    1,\n                    2\n                ]\n            },\n            {\n                \"type\": 4,\n                \"atoms\": [\n                    2,\n                    0\n                ]\n            }\n        ],\n        \"stereoFlagPosition\": {\n            \"x\": 15.199999809265137,\n            \"y\": 7.798237323760986,\n            \"z\": 0\n        }\n    }\n}",
+  "mol": "\n  -INDIGO-11012618032D\n\n  3  3  0  0  0  0  0  0  0  0999 V2000\n   14.2000   -8.7982    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   15.2000   -8.7982    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n   14.7000   -9.6643    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n  1  2  4  0  0  0  0\n  2  3  4  0  0  0  0\n  3  1  4  0  0  0  0\nM  CHG  1   3   1\nM  STY  1   1 DAT\nM  SLB  1   1   1\nM  SAL   1  1   3\nM  SDT   1 MRV_IMPLICIT_H                                                       \nM  SDD   1     0.0000    0.0000    DA    ALL  1       1  \nM  SED   1 IMPL_H1\nM  END\n",
+  "smiles": "c1[cH+]c1",
+  "atoms": [
+    {
+      "id": 0,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 1,
+      "label": "C",
+      "charge": null,
+      "implicitH": 1
+    },
+    {
+      "id": 2,
+      "label": "C",
+      "charge": 1,
+      "implicitH": 1
+    }
+  ]
+}
