@@ -17,6 +17,7 @@
 
   const LIMITS = {
     bytes: 8 * 1024 * 1024,
+    assetBytes: 64 * 1024 * 1024,
     atoms: 20000,
     bonds: 40000,
     arrows: 2000,
@@ -27,12 +28,12 @@
 
   function isWorkbenchText(text) {
     if (typeof text !== 'string') return false;
-    if (text.length > LIMITS.bytes) return false;
+    if (text.length > LIMITS.bytes + Math.ceil(LIMITS.assetBytes / 3) * 4 + 4096) return false;
     // 先做便宜的字符串判断，避免把每个 .ket 都 JSON.parse 一遍
     if (text.indexOf('molstudio-workbench') < 0) return false;
     try {
       const obj = JSON.parse(text);
-      return !!obj && obj.format === M.FORMAT;
+      return !!obj && obj.format === M.FORMAT && (obj.version !== 1 || text.length <= LIMITS.bytes);
     } catch (e) {
       return false;
     }
@@ -82,20 +83,28 @@
         if (drawingTypes.has(node.type)) mark(node.data);
       }
     }
+    if (o.document !== undefined) {
+      if (!MW.documentModel) throw new Error('文档模型未加载');
+      const check = MW.documentModel.validateDocument(o.document);
+      if (!check.ok) throw new Error('文档无效：' + check.errors.join('；'));
+    }
     const doc = {
       format: M.FORMAT,
-      version: M.VERSION,
+      version: o.document !== undefined ? 2 : M.VERSION,
       ket: ketObj,
       bindings: serializeBindings(o.bindings),
       mechanism: M.serializeMechanism(o.mechanism || M.emptyState()),
       ...(o.agentTask ? { agentTask: validateAgentTask(o.agentTask) } : {}),
       ...(o.reactionSteps && o.reactionSteps.length ? { reactionSteps: o.reactionSteps } : {}),
-      ...(o.reactionStepOperations && o.reactionStepOperations.length ? { reactionStepOperations: o.reactionStepOperations } : {})
+      ...(o.reactionStepOperations && o.reactionStepOperations.length ? { reactionStepOperations: o.reactionStepOperations } : {}),
+      ...(o.document !== undefined ? { document: o.document } : {})
     };
-    return JSON.stringify(doc, function (key, value) {
+    const serialized = JSON.stringify(doc, function (key, value) {
       return (key === 'selected' || key === 'initiallySelected') && typeof value === 'boolean' && selectionHolders.has(this)
         ? undefined : value;
     });
+    if (o.document !== undefined && nonAssetLength(doc) > LIMITS.bytes) throw new Error('文件非资源内容超过 8MB 上限');
+    return serialized;
   }
 
   /* 只改机理层、不重写 KET 的快速序列化（导出/内部比较用，仍走同一字段顺序） */
@@ -104,6 +113,12 @@
   }
 
   function isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+  function nonAssetLength(obj) {
+    const copy = Object.assign({}, obj, { document: Object.assign({}, obj.document, { assets: {} }) });
+    const value = JSON.stringify(copy);
+    return typeof TextEncoder === 'function' ? new TextEncoder().encode(value).length : unescape(encodeURIComponent(value)).length;
+  }
 
   // A task checkpoint is document data, never an instruction to start a model.
   // Keep the same bounded shape at save, load and bridge writes. In particular,
@@ -147,7 +162,7 @@
     if (typeof text !== 'string' || !text.trim()) {
       return { ok: false, code: 'empty', error: '文件是空的' };
     }
-    if (text.length > LIMITS.bytes) {
+    if (text.length > LIMITS.bytes + Math.ceil(LIMITS.assetBytes / 3) * 4 + 4096) {
       return { ok: false, code: 'too_large', error: '文件超过 ' + Math.round(LIMITS.bytes / 1024 / 1024) + 'MB 上限，已拒绝载入' };
     }
     let obj;
@@ -162,12 +177,24 @@
     if (!Number.isInteger(version) || version < 1) {
       return { ok: false, code: 'bad_version', error: 'version 字段非法' };
     }
-    if (version > M.VERSION) {
+    if (version > 2 || (version === 2 && !MW.documentModel)) {
       return { ok: false, code: 'newer_version',
-               error: '该文件由更新版本（v' + version + '）保存，当前版本只支持 v' + M.VERSION + '，已拒绝载入以免丢数据' };
+               error: '该文件由更新版本（v' + version + '）保存，当前版本只支持 v' + (MW.documentModel ? 2 : M.VERSION) + '，已拒绝载入以免丢数据' };
+    }
+
+    if ((version === 1 && text.length > LIMITS.bytes) || (version === 2 && nonAssetLength(obj) > LIMITS.bytes)) {
+      return { ok: false, code: 'too_large', error: '文件非资源内容超过 8MB 上限，已拒绝载入' };
     }
 
     const errs = [];
+    if (version === 1 && Object.prototype.hasOwnProperty.call(obj, 'document')) errs.push('v1 文件不支持 document');
+    if (version === 2) {
+      if (!MW.documentModel) errs.push('文档模型未加载');
+      else {
+        const check = MW.documentModel.validateDocument(obj.document);
+        if (!check.ok) errs.push(...check.errors);
+      }
+    }
     let agentTask = null;
     if (!isPlainObject(obj.ket)) errs.push('缺少 ket 对象');
     if (!isPlainObject(obj.bindings)) errs.push('缺少 bindings 对象');
@@ -340,6 +367,7 @@
         ...(agentTask && { agentTask }),
         ...(reactionSteps.length ? { reactionSteps: reactionSteps } : {}),
         ...(reactionStepOperations.length ? { reactionStepOperations: reactionStepOperations } : {}),
+        ...(version === 2 ? { document: obj.document } : {}),
         mechanism: M.normalizeState({
           steps: mech.steps,
           lonePairs: mech.lonePairs,

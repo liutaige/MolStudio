@@ -54,7 +54,10 @@ def exercise(app, temp):
             assert response.status == 200
         with urllib.request.urlopen(base + "/canvas.html", timeout=5) as response:
             assert root_page == response.read(), "Service root must serve the current canvas"
-        for path in ("/workbench/canvas-viewport.js", "/ketcher/index.html", "/vendor/ngl.js",
+        for path in ("/workbench/canvas-viewport.js", "/workbench/document-model.js",
+                     "/workbench/document-controller.js", "/workbench/document-ui.js",
+                     "/workbench/document-pages-ui.js", "/workbench/document-clipboard.js",
+                     "/workbench/reaction-step-clipboard.js", "/ketcher/index.html", "/vendor/ngl.js",
                      "/ketcher/inorganic-catalog.js", "/ketcher/inorganic-valence.js",
                      "/agent/app.js", "/agent/panel.js", "/agent/panel.css", "/agent/dist/agent-runtime.js"):
             with urllib.request.urlopen(base + path, timeout=5) as response:

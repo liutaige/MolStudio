@@ -18,9 +18,9 @@ TARGETS = [
     'func sessionOf(', 'func commitSessionSnapshot(', 'func pollActiveSnapshot(',
     'func fetchSnapshot(', 'func applicationShouldTerminate(', 'func askTerminateSave(',
     'func saveAllForTerminate(', 'func verifySavedBeforeLeaving(', 'func finishTerminate(', 'func sessionName(',
-    'func confirmDiscard(', 'func windowShouldClose(', 'func closeActiveSession(', 'func actNewDocument(',
+    'func confirmDiscard(', 'func windowShouldClose(', 'func closeActiveSession(', 'func actNewDocument(', 'func startNewPaperDocument(',
     'func startNavigation(', 'func endNavigationTransaction(', 'func captureForNavigation(',
-    'func captureActiveSession(', 'func applyPending(', 'func rollbackAfterFailedInjection(',
+    'func captureActiveSession(', 'func waitPaperEditorReady(', 'func applyPending(', 'func rollbackAfterFailedInjection(', 'func scheduleWelcomeThumbnail(',
     'func freshBaselineAfterPageReady(', 'func commitFreshSession(', 'func openDocument(',
     'func navigateWithCapture(', 'func actOpen(', 'func actOpenSelected(',
     'func gen3dWarningText(', 'func applyGen3DWarning(',
@@ -30,7 +30,7 @@ TARGETS = [
     # 2026-11-01 机理层：完整快照识别/抽取与自检 JS
     'func canvasSnapshotJS(', 'func normalizedCanvasFileText(', 'func isWorkbenchSnapshot(',
     'func workbenchLoadError(', 'func ketTextFromSnapshot(',
-    'func wrapKetAsWorkbench(', 'func snapshotHasMechanism(',   # 2026-11-01 机理层：fetchCanvasSavePair → fetchCanvasSaveTexts（取完整快照 + 写盘文本）
+    'func wrapKetAsWorkbench(', 'func snapshotHasMechanism(', 'func snapshotHasDocument(',   # 2026-11-01 机理层：fetchCanvasSavePair → fetchCanvasSaveTexts（取完整快照 + 写盘文本）
     # 2026-11-01 父代理补充：导航失败出口 / 逃生阀 / 页面可用性
     'func abortNavigation(', 'func offerReloadAfterPageFailure(', 'func reloadCurrentPage(',
     'func armNavigationWatchdog(', 'func cancelNavigationWatchdog(',
@@ -94,6 +94,7 @@ extracted = '\n\n    // ===== 以下为 main.swift 逐字提取的真实方法�
 
 TEMPLATE_HEAD = r'''import Foundation
 import UniformTypeIdentifiers
+import CryptoKit
 
 // ============================================================
 // MolStudio R01-R06 回归测试（第二轮复核报告回归）
@@ -128,8 +129,25 @@ final class CanvasSession {
 enum PendingPayload {
     case none
     case newDocument
+    case newPaperDocument(setup: WelcomePaperSetup)
     case openCanvasFile(text: String, url: URL)
     case restoreSession(text: String)
+}
+struct WelcomePaperSetup {
+    var size = "Letter", orientation = "landscape"
+    func toJSONString() -> String? {
+        "{\"mode\":\"paper\",\"size\":\"\(size)\",\"orientation\":\"\(orientation)\"}"
+    }
+}
+enum WelcomeDocumentMode: String { case canvas, paper }
+enum WelcomeThumbnailCache {
+    struct Stamp: Equatable {}
+    static var writes = 0
+    static let maxPNGBytes = 8 * 1024 * 1024
+    static func stamp(_ url: URL) -> Stamp? { FileManager.default.fileExists(atPath:url.path) ? Stamp() : nil }
+    static func validPNG(_ data: Data) -> Bool { !data.isEmpty }
+    static func write(url: URL, directory: URL, expectedStamp: Stamp, mode: WelcomeDocumentMode, png: Data?) throws { writes += 1 }
+    static func copy(from: URL, to: URL, directory: URL, renamed: Bool = false) {}
 }
 
 // MARK: AppKit / WebKit 替身
@@ -223,6 +241,27 @@ final class StubWeb {
     var loaded: [String] = []
     func load(_ r: URLRequest) { loaded.append(r.url?.absoluteString ?? "?") }
 }
+// Native-canvas lifecycle stubs: the real methods are extracted verbatim from
+// main.swift, so these only model the AppKit/Workspace objects they talk to.
+final class StubCanvasHost {
+    var coverVisible = true
+    var failureReasons: [String] = []
+    func setNavigationCoverVisible(_ visible: Bool) { coverVisible = visible }
+    func showNavigationFailure(reason: String? = nil, canSave: Bool = true) {
+        coverVisible = true; failureReasons.append(reason ?? "")
+    }
+}
+final class StubSplitVC { let canvasHostViewController = StubCanvasHost() }
+struct WorkbenchLayerRequirements { var reactionSteps = false; var document = false; var agentTask = false }
+final class StubWorkspaceCoordinator {
+    var navigationGeneration = 0
+    var attachedEpoch: String?
+    var isAttaching = false
+    func beginNavigation(generation: Int) { navigationGeneration = generation; attachedEpoch = nil }
+    func detachCurrentEpoch() { attachedEpoch = nil }
+    func attach(preparedSurfaces: [String], completion: @escaping (Bool) -> Void) { completion(true) }
+    func abandonPendingAttach() { isAttaching = false }
+}
 final class Viewer3D {
     var subtitle: String = ""
     var warningText: String?
@@ -253,7 +292,7 @@ final class Probe {
     var welcomeWin: NSWindow?
     var fileTable: StubTableView?
     var fileList: [URL] = []
-    var docsDir = URL(fileURLWithPath: "/tmp")
+    var docsDir: URL! = URL(fileURLWithPath: "/tmp")
     var activeMode: SessionMode = .canvas
     var canvasSession = CanvasSession()
     var navigationGeneration = 1
@@ -265,8 +304,16 @@ final class Probe {
     var pageQuarantined = false
     var navigationWatchdog: DispatchWorkItem?
     var terminatePending = false
+    var workspaceCoordinator: StubWorkspaceCoordinator? = StubWorkspaceCoordinator()
+    var workspaceSplitVC: StubSplitVC? = StubSplitVC()
+    var workspaceAttachFallbackGeneration: Int?
+    var coverLiftCount = 0
+    func attachWorkspaceCoordinator() { coverLiftCount += 1 }
+    func workbenchRequiredLayers(_ text: String) -> WorkbenchLayerRequirements { WorkbenchLayerRequirements() }
+    func waitWorkbenchLayersReady(gen: Int, required: WorkbenchLayerRequirements, attemptsLeft: Int, _ done: @escaping (Bool, String) -> Void) { done(true, "") }
     var serverPython: String?
     var serverStderrTail = ""
+    var thumbnailGeneration = 0
     let serverStderrLimit = 8000
 
     var statuses: [String] = []
@@ -277,6 +324,7 @@ final class Probe {
 
     var base: URL { URL(string: "http://127.0.0.1:\(kPort)")! }
     var session: CanvasSession { sessionOf(activeMode) }
+    var appUserDefaults: UserDefaults { .standard }
 
     func updateTitle() {}
     func dbg(_ s: String) {}
@@ -292,6 +340,8 @@ final class Probe {
     var pendingPosts: [([String: Any]?) -> Void] = []
     var refreshCount = 0
     func refreshFileList() { refreshCount += 1 }
+    var recentNoted: [URL] = []
+    func noteRecentDocument(_ url: URL) { recentNoted.append(url); refreshFileList() }
 
     // jsValue 替身：脚本化页面快照与注入结果
     var pageSnapshot: String?          // 完整画布快照
@@ -307,9 +357,17 @@ final class Probe {
     var deferCapture = false
     var pendingCaptures: [(Any?, Bool) -> Void] = []
     var jsBodies: [String] = []
+    var deferThumbnail = false
+    var pendingThumbnails: [(Any?, Bool) -> Void] = []
 
     func jsValue(_ body: String, _ done: @escaping (Any?, Bool) -> Void) {
         jsBodies.append(body)
+        if body.contains("crypto.subtle.digest") {
+            if deferThumbnail { pendingThumbnails.append(done) }
+            else { done(["mode":"paper", "dataUrl":"data:image/png;base64,YQ=="], true) }
+            return
+        }
+        if body.contains("k3dAPI?.workbenchReady") { done(true, true); return }
         // 2026-11-01 机理层：saveSession 改走 fetchCanvasSaveTexts（完整快照 + 写盘文本）
         if body.contains("const snap =") {
             if body.contains("mol: mol") {
@@ -323,7 +381,7 @@ final class Probe {
             done(["snap": snap, "txt": snap], true)
             return
         }
-        if body.contains("setMolecule") || body.contains("loadWorkbench") {
+        if body.contains("setMolecule") || body.contains("loadWorkbench") || body.contains("k3dAPI.document.init") {
             injected.append(body)
             if deferInject { pendingJS.append(done); return }
             done(injectReturnValue, injectResultOK)
@@ -369,6 +427,7 @@ func resetStatics() {
     NSSavePanel.count = 0
     NSSavePanel.onRun = nil
     UserDefaults.standard.removeObject(forKey: "lastFile")
+    WelcomeThumbnailCache.writes = 0
 }
 func makeClean(_ s: CanvasSession, _ v: String, url: URL? = nil) {
     s.currentSnapshot = v; s.savedBaseline = v; s.hasSnapshot = true
@@ -1337,7 +1396,12 @@ do {
     p.applyPending(mode: .canvas, gen: p.navigationGeneration)
     p.injectResultOK = false
     p.flushInject()
-    check("N3 载入失败导航回当前画布", p.web.loaded.last?.hasSuffix("/canvas.html") == true && p.navigationInFlight)
+    // Native host now loads canvas.html with the first-frame mode marker and
+    // the navigation generation; browser mode (no query) is unchanged.
+    let lastURL = p.web.loaded.last ?? ""
+    check("N3 载入失败导航回当前画布（首帧模式 URL）",
+          lastURL.contains("/canvas.html?nativeCanvas=1") &&
+          lastURL.contains("navGen=\(p.navigationGeneration)") && p.navigationInFlight)
     check("N3 失败的新文件身份未提交", p.canvasSession.fileURL != replacement && p.canvasSession.currentSnapshot == "UNSAVED_CANVAS")
     p.injectResultOK = true
     p.deferInject = false
@@ -1553,12 +1617,33 @@ do {
     check("W2 带BOM工作台仍检测孤对和机理", p.snapshotHasMechanism("\u{FEFF}" + prettySource))
     check("W2 工作台KET提取接受漂亮JSON", p.ketTextFromSnapshot(prettySource)?.contains("ket_version") == true)
 }
+do {
+    resetStatics()
+    let p = Probe()
+    var v2Object = fullObject
+    v2Object["version"] = 2
+    v2Object["document"] = ["mode": "paper", "objects": [["id": "text-1", "rich": ["text": "中文"]]]]
+    let bytes = try! JSONSerialization.data(withJSONObject: v2Object, options: [.sortedKeys])
+    let source = String(data: bytes, encoding: .utf8)!
+    check("W2 v2完整外壳通过且包装不降级", p.workbenchLoadError(source) == nil && p.wrapKetAsWorkbench(source) == source)
+    check("W2 v2显式导出KET仍可提取", p.ketTextFromSnapshot(source)?.contains("ket_version") == true)
+    makeClean(p.canvasSession, "SAVED")
+    p.pageSnapshot = "SAVED"; p.injectReturnValue = #"{"ok":true}"#
+    let file = URL(fileURLWithPath: fixtureDir + "/open-document-v2.molwork")
+    try! source.write(to: file, atomically: true, encoding: .utf8)
+    p.openDocument(at: file); p.pageSnapshot = source
+    p.applyPending(mode: .canvas, gen: p.navigationGeneration)
+    check("W2 v2完整载入与保存快照保留document", p.injected.last?.contains("loadWorkbench") == true && p.canvasSession.currentSnapshot == source && p.canvasSession.savedBaseline == source)
+}
 for (name, text) in [
     ("bad-json", "{"),
     ("wrong-format", #"{"format":"another-format","version":1}"#),
     ("missing-version", #"{"format":"molstudio-workbench","ket":{},"bindings":{},"mechanism":{}}"#),
     ("boolean-version", #"{"format":"molstudio-workbench","version":true,"ket":{},"bindings":{},"mechanism":{}}"#),
-    ("newer-version", #"{"format":"molstudio-workbench","version":2,"ket":{},"bindings":{},"mechanism":{}}"#),
+    ("newer-version", #"{"format":"molstudio-workbench","version":3,"ket":{},"bindings":{},"mechanism":{}}"#),
+    ("fractional-version", #"{"format":"molstudio-workbench","version":1.5,"ket":{},"bindings":{},"mechanism":{}}"#),
+    ("v2-missing-document", #"{"format":"molstudio-workbench","version":2,"ket":{},"bindings":{},"mechanism":{}}"#),
+    ("v2-array-document", #"{"format":"molstudio-workbench","version":2,"ket":{},"bindings":{},"mechanism":{},"document":[]}"#),
     ("missing-mechanism", #"{"format":"molstudio-workbench","version":1,"ket":{},"bindings":{}}"#)
 ] {
     resetStatics()
@@ -1570,6 +1655,72 @@ for (name, text) in [
     p.openDocument(at: file)
     check("W3 \(name)拒绝而不降级或导航", p.web.loaded.isEmpty && p.injected.isEmpty && p.alerts.last?.0 == "打开失败")
     check("W3 \(name)保留原画布与dirty", p.canvasSession.currentSnapshot == "UNSAVED_CANVAS" && p.canvasSession.dirty)
+}
+
+print("---- W4 新纸页初始化和保存 ----")
+let paperSnapshot = #"{"format":"molstudio-workbench","version":2,"ket":{"root":{"nodes":[]}},"bindings":{"atoms":[],"bonds":[]},"mechanism":{"arrows":[],"lonePairs":[]},"document":{"mode":"paper"}}"#
+do {
+    resetStatics(); let p = Probe(); makeDirtyCanvas(p.canvasSession); p.pageSnapshot = "UNSAVED_CANVAS"
+    NSAlert.nextResult = .cancel
+    p.startNewPaperDocument(WelcomePaperSetup())
+    check("W4 取消新建纸页保留旧内容和文件身份", p.web.loaded.isEmpty && p.canvasSession.currentSnapshot == "UNSAVED_CANVAS" && p.canvasSession.fileURL != nil)
+}
+do {
+    resetStatics(); let p = Probe(); makeClean(p.canvasSession, "OLD", url: URL(fileURLWithPath: "/tmp/old.ket")); p.pageSnapshot = "OLD"
+    p.startNewPaperDocument(WelcomePaperSetup()); let gen = p.navigationGeneration
+    p.injectReturnValue = true; p.pageSnapshot = paperSnapshot
+    p.applyPending(mode: .canvas, gen: gen)
+    check("W4 纸张配置传入JS", p.injected.last?.contains("\"size\":\"Letter\"") == true && p.injected.last?.contains("\"orientation\":\"landscape\"") == true)
+    check("W4 初始化成功才建立干净v2基线", p.canvasSession.currentSnapshot == paperSnapshot && p.canvasSession.savedBaseline == paperSnapshot && p.canvasSession.fileURL == nil && !p.canvasSession.dirty && !p.navigationInFlight)
+}
+do {
+    resetStatics(); let p = Probe(); makeClean(p.canvasSession, "OLD", url: URL(fileURLWithPath: "/tmp/old.ket")); p.pageSnapshot = "OLD"
+    p.startNewPaperDocument(WelcomePaperSetup()); let gen = p.navigationGeneration
+    p.injectReturnValue = false; p.injectResultOK = false
+    p.applyPending(mode: .canvas, gen: gen)
+    check("W4 初始化失败保留旧身份和快照并回退", p.canvasSession.currentSnapshot == "OLD" && p.canvasSession.fileURL?.path == "/tmp/old.ket" && p.web.loaded.count == 2)
+}
+do {
+    resetStatics(); let p = Probe(); makeClean(p.canvasSession, "OLD", url: URL(fileURLWithPath: "/tmp/old.ket")); p.pageSnapshot = "OLD"
+    p.startNewPaperDocument(WelcomePaperSetup()); let gen = p.navigationGeneration
+    p.injectReturnValue = true; p.deferInject = true; p.applyPending(mode: .canvas, gen: gen)
+    p.startNavigation(to: .canvas, pending: .newDocument); p.flushInject()
+    check("W4 迟到纸页回调不改新导航会话", p.canvasSession.currentSnapshot == "OLD" && p.canvasSession.fileURL?.path == "/tmp/old.ket" && p.navigationInFlight)
+}
+do {
+    resetStatics(); let p = Probe(); let old = URL(fileURLWithPath: fixtureDir + "/paper-old.ket"), target = URL(fileURLWithPath: fixtureDir + "/paper-new.molwork")
+    try? FileManager.default.removeItem(at: target); makeClean(p.canvasSession, "OLD", url: old); p.pageSnapshot = paperSnapshot
+    NSSavePanel.chosen = target; var ok = false; p.saveSession(.canvas, forceSaveAs: false) { ok = $0 }
+    check("W4 带文档的旧KET先另存完整molwork", ok && NSSavePanel.count == 1 && p.canvasSession.fileURL == target && (try? String(contentsOf: target, encoding: .utf8)) == paperSnapshot)
+    check("W4 只有成功保存才记录最近文件", p.recentNoted == [target])
+}
+do {
+    resetStatics(); let p = Probe(); let old = URL(fileURLWithPath: fixtureDir + "/paper-old.ket")
+    makeClean(p.canvasSession, "OLD", url: old); p.pageSnapshot = paperSnapshot; NSSavePanel.chosen = nil
+    var ok = true; p.saveSession(.canvas, forceSaveAs: false) { ok = $0 }
+    check("W4 取消纸页另存保留旧文件身份", !ok && p.canvasSession.fileURL == old && p.canvasSession.savedBaseline == "OLD" && p.recentNoted.isEmpty)
+}
+
+print("---- W5 异步欢迎缩略图隔离 ----")
+for scenario in ["current", "navigation", "save", "session", "identity", "snapshot", "superseded"] {
+    resetStatics(); let p = Probe(); let file = URL(fileURLWithPath: fixtureDir + "/thumb-" + scenario + ".molwork")
+    try! "document".write(to:file, atomically:true, encoding:.utf8)
+    makeClean(p.canvasSession, paperSnapshot, url:file); p.pageSnapshot = paperSnapshot; p.deferThumbnail = true
+    p.scheduleWelcomeThumbnail(url:file, snapshot:paperSnapshot)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    check("W5 \(scenario) 已排队异步渲染", p.pendingThumbnails.count == 1)
+    WelcomeThumbnailCache.writes = 0
+    switch scenario {
+    case "navigation": p.navigationGeneration += 1
+    case "save": p.canvasSession.saveGeneration += 1
+    case "session": p.canvasSession = CanvasSession()
+    case "identity": p.canvasSession.fileURL = URL(fileURLWithPath: "/tmp/other.molwork")
+    case "snapshot": p.pageSnapshot = "EDITED_AFTER_RENDER"
+    case "superseded": p.thumbnailGeneration += 1
+    default: break
+    }
+    if !p.pendingThumbnails.isEmpty { p.pendingThumbnails.removeFirst()(["mode":"paper", "dataUrl":"data:image/png;base64,YQ=="], true) }
+    check("W5 \(scenario) 仅当前快照可写", WelcomeThumbnailCache.writes == (scenario == "current" ? 1 : 0), "writes=\(WelcomeThumbnailCache.writes), jsCalls=\(p.jsBodies.count)")
 }
 
 print("---- 汇总 ----")

@@ -501,6 +501,32 @@
     let replacement = null, workbenchLoadDepth = 0, taskCheckpoint = null, taskCheckpointOwner = null;
     let reactionGlyphOffsets = new Map();
     const runs = new Map(), cache = new Map(), reactionConnectors = new Map(), stepOperations = new Map();
+    function documentState() { return app.documentController?.active ? app.documentController.state : null; }
+    function documentSignature() {
+      const state = documentState();
+      return state && { ...state, assets: Object.fromEntries(Object.entries(state.assets).map(([id, asset]) =>
+        [id, { mime: asset.mime, bytes: asset.data.length }])) };
+    }
+    function documentSnapshot() {
+      const state = documentState();
+      if (!state) return null;
+      return { mode: state.mode, page: state.page, ptPerBond: state.ptPerBond,
+        pages: MW.documentModel.pageRects(state), regions: state.regions,
+        objects: state.objects.map(object => ({ id: object.id, kind: object.kind, x: object.x, y: object.y,
+          w: object.w, h: object.h, rotation: object.rotation || 0,
+          ...(object.pageId && { pageId: object.pageId }), ...(object.kind === 'text' && { text: object.rich.text }) })) };
+    }
+    function paperTarget() {
+      const state = documentState();
+      if (state?.mode !== 'paper') return null;
+      const pages = MW.documentModel.pageRects(state), active = app.documentController.getActivePage?.();
+      return pages.find(page => page.id === (typeof active === 'string' ? active : active?.id)) || pages[0];
+    }
+    function paperBounds() {
+      const rect = paperTarget()?.content;
+      return rect && { x1: rect.x, y1: rect.y, x2: rect.x + rect.w, y2: rect.y + rect.h };
+    }
+    function readingWidth(fallback = LAYOUT.readingRowWidth) { return paperTarget()?.content.w ?? fallback; }
     function refreshReactionGlyphs() {
       const offsets = new Map();
       for (const [rid] of ed.struct().atoms) {
@@ -510,7 +536,7 @@
       }
       reactionGlyphOffsets = offsets;
     }
-    function signatureNow() { const ket = JSON.parse(native.serialize(ed.struct())); return canonical({ ket: revisionSource(ket), mechanism: M.serializeMechanism(model.state), reactionSteps: exportReactionSteps(ket), reactionStepOperations: [...stepOperations.values()] }); }
+    function signatureNow() { const ket = JSON.parse(native.serialize(ed.struct())); return canonical({ ket: revisionSource(ket), mechanism: M.serializeMechanism(model.state), reactionSteps: exportReactionSteps(ket), reactionStepOperations: [...stepOperations.values()], ...(documentState() && { document: documentSignature() }) }); }
     function event(source, reason) {
       if (root.dispatchEvent && root.CustomEvent) root.dispatchEvent(new root.CustomEvent('molstudio:agent-canvas-change', { detail: { sessionId, revision, source, reason } }));
     }
@@ -521,7 +547,9 @@
     }
     function invalidate(run, reason) { if (!run || run.state !== 'active') return; run.state = 'invalid'; run.reason = reason; clearPreview(run.id); }
     function scan(source = pendingScan?.source || 'unknown', reason = pendingScan?.reason || 'unattributed') {
-      if (disposed || writeDepth || replacement) return;
+      // PasteTool temporarily adds its moving preview to the native Struct.
+      // It is not authored content until commit and must not consume a revision.
+      if (disposed || writeDepth || replacement || nativePasteInProgress()) return;
       const next = signatureNow();
       if (signature === null) { signature = next; return; }
       if (next === signature) return;
@@ -581,6 +609,7 @@
       return action();
     }
     function getRun(id, create = false) {
+      assertCommittedSource();
       if (!ref(id)) fail('runId 无效', 'invalid_run');
       let run = runs.get(id);
       if (!run && create) {
@@ -596,7 +625,14 @@
     }
     function checkRun(run, signal) {
       abort(signal);
+      assertCommittedSource();
       if (disposed || run.state !== 'active' || run.sessionId !== sessionId || run.revision !== revision) fail(run.reason || '画布已改变，请读取当前内容后继续', 'stale_canvas');
+    }
+    function nativePasteInProgress() {
+      return !!(controller.nativePasteSession || doc.defaultView?.molstudioClipboard?.nativePreviewActive);
+    }
+    function assertCommittedSource() {
+      if (nativePasteInProgress()) fail('请先放置或取消正在预览的片段，再使用 AI 或读取画布。', 'edit_in_progress');
     }
     function visibleModelBounds() {
       const win = doc.defaultView;
@@ -619,6 +655,20 @@
         if (side === 'left' || side === 'top') visible[side] = Math.max(visible[side], bar[edge]);
         else visible[side] = Math.min(visible[side], bar[edge]);
       }
+      // Native tool/zoom palettes and the safe area live outside the DOM. They
+      // share the exact effective region (same layoutRevision) computed by the
+      // canvas viewport, so generated graphics, fit and paste placement cannot
+      // land behind a native overlay.
+      const nativeInsets = win.parent?.molCanvasViewport?.nativeInsetsFrame?.()
+        || win.molCanvasViewport?.nativeInsetsFrame?.()
+        || win.parent?.MolCanvasViewport?.nativeInsetsFrame?.()
+        || win.MolCanvasViewport?.nativeInsetsFrame?.();
+      if (nativeInsets) {
+        visible.left = Math.max(visible.left, nativeInsets.left);
+        visible.top = Math.max(visible.top, nativeInsets.top);
+        if (nativeInsets.right > 0) visible.right = Math.min(visible.right, (win.innerWidth - nativeInsets.right));
+        if (nativeInsets.bottom > 0) visible.bottom = Math.min(visible.bottom, (win.innerHeight - nativeInsets.bottom));
+      }
       const margin = 12;
       if (visible.right - visible.left <= 2 * margin || visible.bottom - visible.top <= 2 * margin) return null;
       const lo = a.clientToModel({ x: visible.left + margin, y: visible.top + margin });
@@ -631,9 +681,10 @@
       return { zoom: a.zoom(), offset: a.offset(), viewBox: a.canvasSvg()?.getAttribute('viewBox') || '', center: center || { x: 0, y: 0 }, width: rect.width, height: rect.height, visibleBounds: visibleModelBounds() };
     }
     function getContext() {
-      return withSettledCanvas(() => { scan(); a.syncIdentity(); refreshReactionGlyphs(); return snapshotContext(); });
+      return withSettledCanvas(() => { assertCommittedSource(); scan(); a.syncIdentity(); refreshReactionGlyphs(); return snapshotContext(); });
     }
     function snapshotContext(pendingConnectors = new Map()) {
+      assertCommittedSource();
       a.syncIdentity();
       const st = ed.struct(), chem = a.chemSnapshot(), props = new Map(chem.atoms.map(atom => [atom.uuid, atom]));
       const atoms = Array.from(st.atoms, ([id, atom]) => ({ id: a.uuidOfAtom(id), ...props.get(a.uuidOfAtom(id)), x: atom.pp.x, y: atom.pp.y, stereoLabel: atom.stereoLabel || null, stereoParity: atom.stereoParity || null, alias: typeof atom.alias === 'string' ? atom.alias : null })).map(atom => { delete atom.uuid; return atom; });
@@ -682,7 +733,11 @@
       const observationRecords = [...knownArrows.values()];
       const reactionSteps = observationRecords.map(record => stepObservation(record, observationRecords));
       return copy({ sessionId, revision, coordinateSystem: 'Ketcher model coordinates: x right, y down; bond length approximately 1', atoms, bonds, molecules, texts, lonePairs: model.state.lonePairs, arrows: model.state.arrows, reactionArrows, reactionSteps, steps: model.state.steps,
-        selection: { atoms: selection.atoms.map(id => a.uuidOfAtom(id)).filter(Boolean), bonds: selection.bonds.map(id => a.uuidOfBond(id)).filter(Boolean), mechanism: Array.from(controller.selection), otherCount: selection.others }, viewport: viewport(), limits: { operationsPerCall: MAX_OPERATIONS, nativeHistory: 32 }, supportedOperations: Array.from(TYPES) });
+        selection: { atoms: selection.atoms.map(id => a.uuidOfAtom(id)).filter(Boolean), bonds: selection.bonds.map(id => a.uuidOfBond(id)).filter(Boolean), mechanism: Array.from(controller.selection), otherCount: selection.others,
+          ...(documentState() && { document: [...app.documentController.selection] }) },
+        ...(documentState() && { document: { ...documentSnapshot(), activePageId: paperTarget()?.id || null,
+          layoutPolicy: 'Keep automatic drawings inside the active page content rectangle; if it is full, ask for another page. Do not shrink chemistry or change page settings.' } }),
+        viewport: viewport(), limits: { operationsPerCall: MAX_OPERATIONS, nativeHistory: 32 }, supportedOperations: Array.from(TYPES) });
     }
     function atomId(value, aliases = null) {
       const uuid = aliases?.get(value) || value;
@@ -903,6 +958,12 @@
         if (from && to) boxes.push({ x1: Math.min(from.x, to.x) - 0.15, y1: Math.min(from.y, to.y) - 0.15,
           x2: Math.max(from.x, to.x) + 0.15, y2: Math.max(from.y, to.y) + 0.15 });
       }
+      for (const object of documentState()?.objects || []) {
+        const angle = (object.rotation || 0) * Math.PI / 180,
+          w = Math.abs(Math.cos(angle)) * object.w + Math.abs(Math.sin(angle)) * object.h,
+          h = Math.abs(Math.sin(angle)) * object.w + Math.abs(Math.cos(angle)) * object.h;
+        boxes.push(boxAt({ x: object.x + object.w / 2, y: object.y + object.h / 2 }, { width: w, height: h }));
+      }
       return boxes;
     }
     function boxesOverlap(box, occupied, gap) {
@@ -940,6 +1001,8 @@
       return null;
     }
     function layoutViewport() {
+      const paper = paperBounds();
+      if (paper) return paper;
       const { visibleBounds, center } = viewport();
       return visibleBounds || boxAt(center, { width: 24, height: 16 });
     }
@@ -1641,7 +1704,8 @@
         const obstacles = stageObstacles.concat(layout.reserved);
         const origin = run.stageOrigins.get(stageId);
         const center = anchor ? midpoint(anchor) : (origin ? { ...origin } : {
-          x: view.x1 + (view.x2 - view.x1) * 0.28, y: (view.y1 + view.y2) / 2
+          x: paperTarget() ? view.x1 + packed.width / 2 : view.x1 + (view.x2 - view.x1) * 0.28,
+          y: paperTarget() ? view.y1 + packed.height / 2 : (view.y1 + view.y2) / 2
         });
         if (anchor) {
           const half = (axis === 'x' ? packed.width : packed.height) / 2;
@@ -1658,7 +1722,7 @@
               const rowRight = previous.rowRight ?? rowLeft;
               const nextLeft = rowRight + LAYOUT.groupGap;
               const wrap = run.separatePaths || breakBefore || previous.steps >= LAYOUT.rowSteps ||
-                nextLeft + packed.width + stageWidth > rowLeft + LAYOUT.independentRowWidth;
+                nextLeft + packed.width + stageWidth > rowLeft + readingWidth(LAYOUT.independentRowWidth);
               center.x = (wrap ? rowLeft : nextLeft) + packed.width / 2;
               const bottom = run.separatePaths ? Math.max(...previousRows.map(flow => flow.rowBottom)) : previous.rowBottom;
               center.y = wrap ? bottom + LAYOUT.readingRowGap + packed.height / 2 : previous.rowY;
@@ -1671,7 +1735,7 @@
           : run.readingOrder ? clearAlong(center, packed, obstacles, LAYOUT.minReactionGap, independentRows.get(stageId) ? 'x' : 'y', 1)
           : openCanvasCenter(center, packed, obstacles, LAYOUT.minReactionGap);
         const previousRow = independentRows.get(stageId);
-        if (!anchor && previousRow && placed.x + packed.width / 2 + stageWidth > previousRow.rowLeft + LAYOUT.independentRowWidth) {
+        if (!anchor && previousRow && placed.x + packed.width / 2 + stageWidth > previousRow.rowLeft + readingWidth(LAYOUT.independentRowWidth)) {
           const nextRow = { x: previousRow.rowLeft + packed.width / 2,
             y: previousRow.rowBottom + LAYOUT.readingRowGap + packed.height / 2 };
           placed = clearAlong(nextRow, packed, obstacles, LAYOUT.minReactionGap, 'y', 1);
@@ -1721,7 +1785,7 @@
         if (run.readingOrder) {
           const rowLeft = previous?.rowLeft ?? source.x1, sourceRowY = previous?.rowY ?? midpoint(source).y;
           const targetWidth = to.reduce((sum, member) => sum + (sizes.get(member.id)?.width || 0) + LAYOUT.groupGap, 0);
-          const rowWidth = linkedPrevious ? (previous?.rowWidth ?? LAYOUT.readingRowWidth)
+          const rowWidth = paperTarget() ? readingWidth() : linkedPrevious ? (previous?.rowWidth ?? LAYOUT.readingRowWidth)
             : !run.separatePaths && independentRows.has(op.id) ? LAYOUT.independentRowWidth : LAYOUT.readingRowWidth;
           const tooWide = source.x2 + gap + targetWidth > rowLeft + rowWidth;
           wraps = !!linkedPrevious && !fixedTargets.length && previousSteps > 0 && (wraps || tooWide);
@@ -1848,7 +1912,10 @@
     function placement(op, run, view, fragment, occupied = occupiedBoxes(), layout) {
       const planned = layout?.positions.get(op.id);
       if (planned) return planned;
-      const size = fragment ? fragmentBounds(fragment) : { width: 2, height: 0.8 };
+      const textLines = op.type === 'text.add' ? op.text.split('\n') : null;
+      const size = fragment ? fragmentBounds(fragment) : textLines
+        ? { width: Math.max(...textLines.map(conditionWidth)), height: Math.max(0.8, textLines.length * 0.55) }
+        : { width: 2, height: 0.8 };
       const limits = centerLimits(view, size);
       if (!inside(run.anchor, view)) run.anchor = midpoint(view);
       const explicit = own(op, 'x') || own(op, 'y');
@@ -1878,6 +1945,15 @@
       occupied.push(box);
       if (!explicit && !inside(pos, limits)) layout?.follow.push(box);
       return result;
+    }
+    function textAnchor(op, placed) {
+      // Native text positions are the top-left anchor, while automatic space
+      // allocation reserves a centred box. Preserve explicit coordinates and
+      // the existing infinite-canvas contract.
+      if (!paperTarget() || own(op, 'x') || own(op, 'y')) return placed;
+      const lines = op.text.split('\n');
+      return { ...placed, x: placed.x - Math.max(...lines.map(conditionWidth)) / 2,
+        y: placed.y - Math.max(0.8, lines.length * 0.55) / 2 };
     }
     async function prepare(ops, signal) {
       const data = new Map();
@@ -2345,6 +2421,176 @@
         for (const [key, value] of state.operations) stepOperations.set(key, copy(value));
       }
     }
+    function translateStepRuntime(state, options) {
+      const { dx, dy } = options || {};
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) fail('步骤移动坐标无效', 'invalid_operation');
+      const selected = options.nativeSelection || {}, atoms = new Set(options.atomIds || selected.atoms || []);
+      const arrows = new Set(selected.rxnArrows || []), texts = new Set(selected.texts || []);
+      const components = new Map();
+      for (const part of connectedComponents()) for (const id of part.uuids) components.set(id, part.rids);
+      const connectors = new Map();
+      const shift = point => ({ ...point, x: point.x + dx, y: point.y + dy });
+      for (const [key, source] of state.connectors) {
+        const record = cloneConnector(source);
+        const whole = arrows.has(record.id) && [...record.reactants, ...record.products].every(id =>
+          components.get(id)?.every(rid => atoms.has(rid))) && (record.labels || []).every(label => texts.has(label.id));
+        if (whole) {
+          record.start = shift(record.start); record.end = shift(record.end);
+          if (record.flow) {
+            for (const name of ['rowLeft', 'rowRight', 'arrowStartX', 'arrowEndX']) if (Number.isFinite(record.flow[name])) record.flow[name] += dx;
+            for (const name of ['rowY', 'rowBottom', 'sourceRowY', 'arrowStartY', 'arrowEndY']) if (Number.isFinite(record.flow[name])) record.flow[name] += dy;
+            if (record.flow.anchors) record.flow.anchors = record.flow.anchors.map(shift);
+            for (const value of Object.values(record.flow)) if (typeof value === 'number' && (!Number.isFinite(value) || Math.abs(value) > 10000)) fail('步骤移动超出可保存范围', 'invalid_operation');
+          }
+          for (const label of record.labels || []) if (label.role === 'graphPort') {
+            label.layoutX += dx; label.layoutY += dy;
+          }
+        }
+        connectors.set(key, record);
+      }
+      return { connectors, operations: new Map(state.operations || []) };
+    }
+    function checkedStepClipboard(data) {
+      const planner = MW.reactionStepClipboard;
+      if (!planner) fail('当前构建缺少反应步骤复制模块', 'clipboard_steps_unavailable');
+      const result = planner.validate(data);
+      if (!result.ok) fail(result.errors.join('；'), 'clipboard_steps_invalid');
+      return data;
+    }
+    function clipboardStepRecord(record) {
+      const arrow = ed.struct().rxnArrows.get(record.id);
+      const labels = (record.labels || []).map(label => {
+        const text = ed.struct().texts.get(label.id);
+        if (!text?.position || text.content !== label.nativeContent) fail('步骤标签已变化，请先整理原步骤再复制', 'clipboard_steps_invalid');
+        const { id, nativeContent, ...metadata } = label;
+        return { ...copy(metadata), nativeContent: text.content, position: { x: text.position.x, y: text.position.y } };
+      });
+      return { stepId: record.stepId, reactants: record.reactants.slice(), products: record.products.slice(),
+        ...(record.layout && { layout: copy(record.layout) }), ...(record.flow && { flow: copy(record.flow) }),
+        ...(record.conditions && { conditions: record.conditions }),
+        arrow: { mode: arrow.mode, start: { x: arrow.pos[0].x, y: arrow.pos[0].y }, end: { x: arrow.pos[1].x, y: arrow.pos[1].y } }, labels };
+    }
+    function captureClipboardSteps() {
+      const selection = ed.selection() || {}, arrowIds = new Set(selection.rxnArrows || []);
+      const records = [...reactionConnectors.values()].filter(record => arrowIds.has(record.id) && connectorStillDrawn(record));
+      if (!records.length) return null;
+      const atomIds = new Set(selection.atoms || []), textIds = new Set(selection.texts || []);
+      for (const id of selection.bonds || []) { const bond = ed.struct().bonds.get(id); if (bond) { atomIds.add(bond.begin); atomIds.add(bond.end); } }
+      const copied = new Set([...atomIds].map(id => a.uuidOfAtom(id))), components = new Map();
+      for (const part of connectedComponents()) for (const id of part.uuids) components.set(id, part.uuids);
+      for (const record of records) {
+        if ([...record.reactants, ...record.products].some(id => !components.get(id)?.every(member => copied.has(member)))) {
+          fail('复制反应步骤需要同时选择完整的反应物和产物', 'clipboard_steps_incomplete');
+        }
+        if ((record.labels || []).some(label => !textIds.has(label.id))) fail('复制反应步骤需要同时选择条件和续接标签', 'clipboard_steps_incomplete');
+      }
+      return checkedStepClipboard({ version: 1, steps: records.map(clipboardStepRecord) });
+    }
+    function prepareClipboardImport(workbench) {
+      const parsed = MW.storage.parseWorkbench(typeof workbench === 'string' ? workbench : JSON.stringify(workbench));
+      if (!parsed.ok) fail(parsed.error, parsed.code);
+      const source = parsed.doc;
+      if (!source.reactionSteps?.length) return null;
+      const nodes = source.ket.root.nodes, fragment = native.prepareKet(JSON.stringify(source.ket));
+      const textNodes = nodes.map((node, index) => node.type === 'text' ? index : -1).filter(index => index >= 0);
+      const nativeTexts = [...fragment.texts.values()];
+      const steps = source.reactionSteps.map((step, stepIndex) => {
+        const arrow = nodes[step.arrow]?.data;
+        if (!arrow?.pos || arrow.pos.length !== 2) fail('导入步骤缺少直箭头坐标', 'clipboard_steps_invalid');
+        const point = p => ({ x: p.x, y: -p.y });
+        const labels = (step.labels || []).map(label => {
+          const node = nodes[label.node], text = nativeTexts[textNodes.indexOf(label.node)], box = node?.boundingBox;
+          if (!box || !text) fail('导入步骤缺少标签', 'clipboard_steps_invalid');
+          const { node: locator, ...metadata } = label;
+          return { ...copy(metadata), nativeContent: text.content, position: { x: box.x, y: -box.y } };
+        });
+        return { stepId: step.stepId || 'legacy-step-' + stepIndex, reactants: step.reactants.slice(), products: step.products.slice(),
+          ...(step.layout && { layout: copy(step.layout) }), ...(step.flow && { flow: copy(step.flow) }),
+          ...(step.conditions && { conditions: step.conditions }),
+          arrow: { mode: arrow.mode, start: point(arrow.pos[0]), end: point(arrow.pos[1]) }, labels };
+      });
+      return checkedStepClipboard({ version: 1, steps });
+    }
+    function appendClipboardSteps(data, resolved, meta) {
+      checkedStepClipboard(data);
+      if (!resolved?.ok || !meta?.beforeNativePools || typeof resolved.session?.transform !== 'function') fail('粘贴步骤缺少原子或原生对象对应关系', 'clipboard_steps_invalid');
+      const before = captureStepRuntime(), inverses = [], stepIdMap = new Map();
+      const usedTokens = new Set([...reactionConnectors.values()].flatMap(record => (record.labels || [])
+        .filter(label => ['graphPort', 'previousRow', 'nextRow'].includes(label.role)).map(label => label.token || label.text)));
+      const planned = MW.reactionStepClipboard.plan(data, { atomMap: resolved.atomMap, transform: resolved.session.transform,
+        scale: meta.scale ?? 1, rotation: meta.rotation ?? 0, usedTokens, newId: () => 'rs-' + uid() });
+      if (!planned.ok) fail(planned.error || '无法恢复复制的反应步骤', 'clipboard_steps_invalid');
+      const st = ed.struct(), arrows = [...st.rxnArrows].filter(([id]) => !meta.beforeNativePools.rxnArrows.has(id));
+      const texts = [...st.texts].filter(([id]) => !meta.beforeNativePools.texts.has(id));
+      const usedArrows = new Set(), usedTexts = new Set();
+      const close = (p, q) => p && q && Number.isFinite(p.x) && Number.isFinite(p.y) && Math.hypot(p.x - q.x, p.y - q.y) < 1e-4;
+      const sameContent = (first, second) => { try { return canonical(JSON.parse(first)) === canonical(JSON.parse(second)); } catch (_) { return first === second; } };
+      try {
+        const prepared = planned.steps.map(step => {
+          const matches = arrows.filter(([id, arrow]) => !usedArrows.has(id) && arrow.mode === step.arrow.mode && close(arrow.pos[0], step.arrow.start) && close(arrow.pos[1], step.arrow.end));
+          if (matches.length !== 1) fail('复制的反应直箭头无法唯一对应，已取消整份粘贴', 'clipboard_steps_ambiguous');
+          const [id, nativeArrow] = matches[0]; usedArrows.add(id);
+          const labels = step.labels.map(label => {
+            const matches = texts.filter(([id, text]) => !usedTexts.has(id) && sameContent(text.content, label.sourceContent) && close(text.position, label.position));
+            if (matches.length !== 1) fail('复制的步骤标签无法唯一对应，已取消整份粘贴', 'clipboard_steps_ambiguous');
+            const [id, text] = matches[0]; usedTexts.add(id);
+            return { label, id, text };
+          });
+          return { step, id, nativeArrow, labels };
+        });
+        for (const entry of prepared) {
+          const { step, id, nativeArrow } = entry, labels = [];
+          for (const found of entry.labels) {
+            const { label } = found;
+            let labelId = found.id, nativeText = found.text;
+            const sourceLabel = data.steps.find(source => source.stepId === step.sourceStepId)?.labels
+              .find(source => source.nativeContent === label.sourceContent && close(source.position, label.sourcePosition));
+            if (label.desiredText !== sourceLabel?.text) {
+              if (['graphPort', 'previousRow', 'nextRow'].includes(label.role)) {
+                const so = structOpsRequired();
+                inverses.push(new so.textDelete(labelId).perform(ed.render.ctab));
+                const existing = new Set(st.texts.keys());
+                inverses.push(native.createText(ed.render.ctab, label.desiredText, label.position));
+                labelId = [...st.texts.keys()].find(key => !existing.has(key)); nativeText = st.texts.get(labelId);
+                if (!nativeText) fail('无法创建新的续接标签', 'clipboard_steps_invalid');
+              }
+            }
+            const { sourceContent, sourcePosition, position, desiredText, nativeContent, ...metadata } = label;
+            labels.push({ ...copy(metadata), text: desiredText, id: labelId, nativeContent: nativeText.content });
+          }
+          const sides = reactionSides(step, reactionMoleculeBoxes(), ref => ref);
+          if (reactionConnectors.has(sides.key)) fail('复制步骤与已有步骤身份重合，已取消粘贴', 'clipboard_steps_ambiguous');
+          reactionConnectors.set(sides.key, { id, nativeArrow, mode: nativeArrow.mode,
+            stepId: step.stepId, version: 1, reactants: step.reactants.slice(), products: step.products.slice(),
+            productComponents: sides.products.map(box => box.component), start: { ...nativeArrow.pos[0] }, end: { ...nativeArrow.pos[1] }, labels,
+            ...(step.layout && { layout: copy(step.layout) }), ...(step.flow && { flow: copy(step.flow) }), ...(step.conditions && { conditions: step.conditions }) });
+          stepIdMap.set(step.sourceStepId, step.stepId);
+        }
+        return { before, after: captureStepRuntime(), inverses, stepIdMap };
+      } catch (error) {
+        for (let i = inverses.length - 1; i >= 0; i--) inverses[i].perform(ed.render.ctab);
+        restoreStepRuntime(before, false); rebindConnectors();
+        throw error;
+      }
+    }
+    function wrapClipboardHistory(action, outcome) {
+      if (!action || typeof action.perform !== 'function') fail('粘贴缺少可撤销的原生动作', 'clipboard_steps_invalid');
+      const original = action.perform;
+      function half(performNative, postActions, targetSteps, undoing) {
+        return { operations: [], isDummy: () => false, perform(ctab) {
+          const oppositeSteps = captureStepRuntime(), oppositePost = [];
+          let oppositeNative;
+          const post = () => { for (let i = postActions.length - 1; i >= 0; i--) oppositePost.push(postActions[i].perform(ctab)); };
+          if (undoing) { post(); oppositeNative = performNative(ctab); }
+          else { oppositeNative = performNative(ctab); post(); }
+          restoreStepRuntime(targetSteps, false); rebindConnectors();
+          return half(next => oppositeNative.perform(next), oppositePost, oppositeSteps, !undoing);
+        } };
+      }
+      const wrapper = half(ctab => original.call(action, ctab), outcome.inverses, outcome.before, true);
+      action.perform = wrapper.perform;
+      return action;
+    }
     function stepStateAction(state) {
       return { operations: [], isDummy: () => false, perform() {
         const inverse = captureStepRuntime();
@@ -2774,10 +3020,11 @@
         for (let i = 0; i < chain.length; i++) stages.push(group(new Set([...to.get(chain[i]), ...(i + 1 < chain.length ? from.get(chain[i + 1]) : [])]),
           chain[i + 1]?.layout || {}));
         const startBox = unionBoxes([...from.get(chain[0])].map(id => boxes.get(byComponent.get(id).uuids[0])));
-        const rowLeft = chain[0].flow?.rowLeft ?? startBox.x1, rowWidth = LAYOUT.readingRowWidth;
+        const target = paperTarget(), rowLeft = target?.content.x ?? chain[0].flow?.rowLeft ?? startBox.x1, rowWidth = readingWidth();
         let rowY = midpoint(boxes.get(byComponent.get(stages[0].main).uuids[0])).y, rowBottom = startBox.y2, count = 0;
         const anchorY = stage => stage.offsets.get(stage.main).y;
         const lane = { width: rowWidth, height: 2 * Math.max(...stages.map(stage => stage.height / 2 + Math.abs(anchorY(stage)))) + 2 * LAYOUT.minReactionGap };
+        if (target) rowY = Math.max(rowY, target.content.y + lane.height / 2);
         const lanes = [];
         // Reserve the reading corridor, not merely the destination molecule.
         // A former product must never sit between the arrow and its new target.
@@ -2915,11 +3162,14 @@
       }));
       const seed = unionBoxes(members.map(part => boxes.get(part.uuids[0])));
       const priorRows = list.map(record => record.flow).filter(flow => Number.isFinite(flow?.rowLeft) && Number.isFinite(flow?.rowY));
-      const anchor = { x: priorRows.length ? Math.min(...priorRows.map(flow => flow.rowLeft)) : seed.x1,
-        y: priorRows.length ? Math.min(...priorRows.map(flow => flow.rowY)) : seed.y1 + Math.min(...molecules.map(molecule => molecule.height)) / 2 };
+      const target = paperTarget();
+      const anchor = { x: target?.content.x ?? (priorRows.length ? Math.min(...priorRows.map(flow => flow.rowLeft)) : seed.x1),
+        y: target ? Math.max(target.content.y + Math.max(...molecules.map(molecule => molecule.height)) / 2 + 1,
+          priorRows.length ? Math.min(...priorRows.map(flow => flow.rowY)) : target.content.y)
+          : priorRows.length ? Math.min(...priorRows.map(flow => flow.rowY)) : seed.y1 + Math.min(...molecules.map(molecule => molecule.height)) / 2 };
       let planned;
       for (;;) {
-        planned = planner.plan({ molecules, steps, groups, anchor, rowWidth: LAYOUT.readingRowWidth, obstacles });
+        planned = planner.plan({ molecules, steps, groups, anchor, rowWidth: readingWidth(), ...(target && { maxRowWidth: target.content.w }), obstacles });
         if (planned.ok || planned.diagnostic?.code !== 'reaction_graph_group_conflict') break;
         const next = groups.filter(group => group.id !== planned.diagnostic.groupId);
         if (next.length === groups.length) break;
@@ -2990,7 +3240,9 @@
       return list;
     }
     app.reactionSteps = { export: exportReactionSteps, restore: restoreReactionSteps,
-      exportOperations: () => copy([...stepOperations.values()]), captureRuntime: captureStepRuntime, restoreRuntime: restoreStepRuntime };
+      exportOperations: () => copy([...stepOperations.values()]), captureRuntime: captureStepRuntime, restoreRuntime: restoreStepRuntime,
+      translateRuntime: translateStepRuntime,
+      captureClipboard: captureClipboardSteps, prepareClipboardImport, appendClipboard: appendClipboardSteps, wrapClipboardHistory };
     // Task metadata is saved with the drawing, but never enters native drawing
     // history or the canvas revision fence. A checkpoint write must not make
     // its own in-flight chemical transaction stale.
@@ -3147,7 +3399,7 @@
       const steps = previous?.steps || 0, rowLeft = previous?.rowLeft ?? source.x1;
       const sourceRowY = previous?.rowY ?? midpoint(source).y;
       const rowBottom = Math.max(previous?.rowBottom ?? source.y2, source.y2);
-      const rowWidth = previous?.rowWidth ?? LAYOUT.readingRowWidth;
+      const rowWidth = paperTarget() ? readingWidth() : previous?.rowWidth ?? LAYOUT.readingRowWidth;
       const tooWide = source.x2 + gap + width > rowLeft + rowWidth;
       const wraps = steps > 0 && (tooWide || (op.layout?.breakBefore ?? steps >= LAYOUT.rowSteps));
       if (!wraps && target.x1 >= source.x2 + 0.95 && Math.abs(midpoint(target).y - sourceRowY) <= 0.18) return null;
@@ -3575,7 +3827,7 @@
             } else if (op.type === 'text.add') {
               const beforeIds = new Set(ed.struct().texts.keys());
               const placed = placement(op, run, view, null, occupiedBoxes(), drawingLayout);
-              actions.push(native.createText(ed.render.ctab, op.text, placed));
+              actions.push(native.createText(ed.render.ctab, op.text, textAnchor(op, placed)));
               const nativeId = Array.from(ed.struct().texts.keys()).find(id => !beforeIds.has(id));
               created.push({ id: op.id, type: op.type, entityIds: [], text: op.text, nativeTextId: nativeId });
             } else if (op.type === 'molecule.move') {
@@ -3880,6 +4132,63 @@
           activeOperation = null;
           const errors = []; M.validateMechanism(model.state, errors);
           if (errors.length) fail(errors[0]);
+          // Width-based wrapping does not constrain page height. Reject a
+          // complete automatic batch before entering history if its chemistry
+          // would leave the active page; retain the user's previous work.
+          const printable = paperBounds();
+          const automaticPaperLayout = printable && ordered.some(op => isStepDeclaration(op) ||
+            op.type === 'layout.tidy' || op.type === 'reactionStep.modify' ||
+            ['text.add', 'arrow.add', 'arrow.modify'].includes(op.type) ||
+            (op.type === 'molecule.add' && !own(op, 'x') && !own(op, 'y')));
+          if (automaticPaperLayout) {
+            const affected = new Set([...movedAtoms, ...created.filter(item => item.type === 'molecule.add')
+              .flatMap(item => (item.atoms || []).map(atom => atom.id))]);
+            const moleculeBoxes = reactionMoleculeBoxes();
+            const bounds = [...new Set([...affected].map(id => moleculeBoxes.get(id)).filter(Boolean))];
+            const changedFlows = new Set([...created, ...updated].flatMap(item => item.entityIds || []));
+            const endpointAtoms = ep => ep.type === 'bond' ? (() => { const b = controller.ctx().bondInfo(ep.bondId); return b ? [b.beginAtom, b.endAtom] : []; })() : M.endpointAtomIds(ep);
+            for (const arrow of model.state.arrows) if (changedFlows.has(arrow.id) ||
+                [...endpointAtoms(arrow.source), ...endpointAtoms(arrow.target)].some(id => affected.has(id))) {
+              const geometry = M.arrowGeometry(arrow, controller.ctx());
+              if (!geometry?.start || !geometry.control || !geometry.end) continue;
+              const points = [geometry.start, geometry.end];
+              for (const axis of ['x', 'y']) {
+                const { start, control, end } = geometry, denominator = start[axis] - 2 * control[axis] + end[axis];
+                const t = denominator ? (start[axis] - control[axis]) / denominator : -1;
+                if (t > 0 && t < 1) points.push(M.quadPoint(start, control, end, t));
+              }
+              bounds.push({ x1: Math.min(...points.map(p => p.x)) - 0.08, y1: Math.min(...points.map(p => p.y)) - 0.08,
+                x2: Math.max(...points.map(p => p.x)) + 0.08, y2: Math.max(...points.map(p => p.y)) + 0.08 });
+            }
+            const textItems = created.filter(item => item.type === 'text.add');
+            if (textItems.length) ed.render.update();
+            for (const item of textItems) {
+              const text = ed.struct().texts.get(item.nativeTextId), paths = ed.render.ctab.texts?.get(item.nativeTextId)?.visel?.paths || [];
+              const measured = [];
+              for (const path of paths) {
+                const rect = path.node?.getBoundingClientRect?.();
+                if (!rect || !rect.width || !rect.height) continue;
+                const lo = a.clientToModel({ x: rect.left, y: rect.top }), hi = a.clientToModel({ x: rect.right, y: rect.bottom });
+                if (lo && hi) measured.push({ x1: Math.min(lo.x, hi.x), x2: Math.max(lo.x, hi.x), y1: Math.min(lo.y, hi.y), y2: Math.max(lo.y, hi.y) });
+              }
+              if (measured.length) bounds.push(...measured);
+              else if (text?.position) {
+                const lines = item.text.split('\n'), p = text.position;
+                bounds.push({ x1: p.x, x2: p.x + Math.max(...lines.map(conditionWidth)), y1: p.y, y2: p.y + Math.max(0.8, lines.length * 0.55) });
+              }
+            }
+            const pending = [...new Map([...reactionConnectors, ...pendingConnectors]).values()];
+            for (const record of pending) if ([...record.reactants, ...record.products].some(id => affected.has(id))) {
+              for (const p of ed.struct().rxnArrows.get(record.id)?.pos || []) bounds.push({ x1: p.x, x2: p.x, y1: p.y - 0.2, y2: p.y + 0.2 });
+              for (const label of record.labels || []) {
+                const p = ed.struct().texts.get(label.id)?.position;
+                if (p) bounds.push({ x1: p.x, x2: p.x + conditionWidth(label.text), y1: p.y - 0.5, y2: p.y + 0.5 });
+              }
+            }
+            const outside = bounds.find(box => box.x1 < printable.x1 - 1e-4 || box.y1 < printable.y1 - 1e-4 ||
+              box.x2 > printable.x2 + 1e-4 || box.y2 > printable.y2 + 1e-4);
+            if (outside) fail('当前纸页的可用区域不足；请新增一页或腾出空间后重试。本批次已撤销，已有内容保持不变。', 'paper_region_full');
+          }
           const limits = MW.storage.LIMITS;
           if (ed.struct().atoms.size > limits.atoms || ed.struct().bonds.size > limits.bonds || model.state.arrows.length > limits.arrows || model.state.lonePairs.length > limits.lonePairs) fail('工作台内容超过可保存的格式上限');
           if (created.length || updated.length || deleted.length || actions.length) {
@@ -4265,7 +4574,8 @@
           }
         }
       }
-      for (const op of ordered.filter(op => op.type === 'text.add')) textViews.push({ op, text: op.text, ...placement(op, run, viewBounds, null, previewOccupied, drawingLayout) });
+      for (const op of ordered.filter(op => op.type === 'text.add')) textViews.push({ op, text: op.text,
+        ...textAnchor(op, placement(op, run, viewBounds, null, previewOccupied, drawingLayout)) });
       /* 修改/删除/整理的 ghost/diff 预览：独立覆盖层，绝不提前改正式源（规范 7）。
          目标可以指向已有对象，也可以指向本流中刚预览过的对象（伪 id）。 */
       const ghostViews = [], draftedBondAtoms = new Set();
@@ -4552,7 +4862,7 @@
     };
     const offAdapter = a.onChange(kind => {
       if (kind === 'history') scheduleScan('manual', 'history');
-      else if (kind !== 'transform') scheduleScan();
+      else if (kind !== 'transform' && kind !== 'pan') scheduleScan();
     });
     const offModel = model.onChange(() => scheduleScan('manual', 'edit'));
     signature = signatureNow();
@@ -4590,14 +4900,26 @@
   if (!root.document) return;
   const MW = root.MolWorkbench = root.MolWorkbench || {};
   MW.agentBridge = { createBridge, validateOperations, dependencyOrder, LAYOUT };
+  // Diagnostics for the native shell's layer wait: createBridge runs after an
+  // async poll, and a rejection here is permanent (app.reactionSteps never
+  // installs). Publish the settle state so the native wait can fail with the
+  // real cause instead of polling blind. No credentials or payloads here.
+  MW.agentBridge.bridgeReady = false;
+  MW.agentBridge.bridgeFailure = null;
   let bridge = null;
   const ready = new Promise((resolve, reject) => {
     const started = Date.now();
     const poll = () => {
       if (MW.app?.ready && root.k3dAPI?.workbenchReady?.()) {
-        try { bridge = createBridge(MW.app); resolve(bridge); } catch (error) { reject(error); }
-      } else if (Date.now() - started > 45000) reject(new Error('化学工作台尚未就绪'));
-      else root.setTimeout(poll, 100);
+        try { bridge = createBridge(MW.app); MW.agentBridge.bridgeReady = true; resolve(bridge); }
+        catch (error) {
+          MW.agentBridge.bridgeFailure = (error && error.message) ? error.message : String(error);
+          reject(error);
+        }
+      } else if (Date.now() - started > 45000) {
+        MW.agentBridge.bridgeFailure = '化学工作台尚未就绪';
+        reject(new Error('化学工作台尚未就绪'));
+      } else root.setTimeout(poll, 100);
     };
     poll();
   });

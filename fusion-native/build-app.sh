@@ -80,13 +80,46 @@ RUNTIME_SOURCE="$1"
 # ---- 2. Build the Swift executable (release, default .build location) ----
 # 沙箱/受限环境下 SwiftPM 可能无法写缓存（sandbox_apply 失败）；BUILD_WITH_SWIFTC=1
 # 直接用 swiftc 编同一份源码，产物等价（单一可执行 target，无依赖）。
+export MACOSX_DEPLOYMENT_TARGET=14.0
+ARCH="$(uname -m)"
+SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || true)"
+SDK_VER="$(xcrun --show-sdk-version 2>/dev/null || true)"
 if [ "${BUILD_WITH_SWIFTC:-0}" = "1" ]; then
-  echo "build: swiftc (BUILD_WITH_SWIFTC=1)"
+  echo "build: swiftc (BUILD_WITH_SWIFTC=1, target=${ARCH}-apple-macos14.0, sdk=${SDK_VER:-unknown})"
   mkdir -p .build/release
-  swiftc -O -module-cache-path "${TMPDIR:-/tmp}/molstudio-swiftc-cache" \
-    Sources/Ketcher3D/main.swift -o .build/release/Ketcher3D
+  SWIFTC_SDK_FLAGS=()
+  if [ -n "$SDK_PATH" ]; then
+    SWIFTC_SDK_FLAGS+=(-sdk "$SDK_PATH")
+  fi
+  if [ -n "$SDK_VER" ]; then
+    SWIFTC_SDK_FLAGS+=(-Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$SDK_VER")
+  fi
+  swiftc -O -target "${ARCH}-apple-macos14.0" -disable-sandbox "${SWIFTC_SDK_FLAGS[@]}" -module-cache-path "${TMPDIR:-/tmp}/molstudio-swiftc-cache" \
+    Sources/Ketcher3D/*.swift -lz -o .build/release/Ketcher3D
 else
-  swift build -c release
+  # Swift 6.4+ default swiftbuild stamps LC_BUILD_VERSION sdk=14.0 when minos=14.0,
+  # suppressing macOS 26+ linked-on-or-after Glass behavior; --build-system native
+  # links against the active Xcode SDK (e.g. sdk 27.2) while preserving minos 14.0.
+  if swift build --help 2>/dev/null | grep -q -- '--build-system'; then
+    swift build -c release --build-system native
+  else
+    swift build -c release
+  fi
+fi
+
+# Verify Mach-O deployment target (minos 14.0) and linked SDK version match Info.plist & active Xcode SDK
+if command -v xcrun >/dev/null 2>&1; then
+  VTOOL_OUT="$(xcrun vtool -show-build .build/release/Ketcher3D 2>&1 || true)"
+  if ! printf '%s\n' "$VTOOL_OUT" | grep -Eq 'minos[[:space:]]+14\.0([[:space:]]|$)'; then
+    echo "error: Mach-O deployment target mismatch in .build/release/Ketcher3D (expected minos 14.0):" >&2
+    printf '%s\n' "$VTOOL_OUT" >&2
+    exit 1
+  fi
+  if [ -n "$SDK_VER" ] && ! printf '%s\n' "$VTOOL_OUT" | grep -Eq "sdk[[:space:]]+${SDK_VER}([[:space:]]|$)"; then
+    echo "error: Mach-O SDK version mismatch in .build/release/Ketcher3D (expected sdk ${SDK_VER}):" >&2
+    printf '%s\n' "$VTOOL_OUT" >&2
+    exit 1
+  fi
 fi
 
 # ---- 3. Fresh bundle: replace only the .app itself, never the whole dist/ ----
@@ -108,6 +141,7 @@ for f in \
   "$ROOT/fusion/agent/app.js" \
   "$ROOT/fusion/agent/panel.js" \
   "$ROOT/fusion/agent/panel.css" \
+  "$ROOT/fusion/agent/native-renderer.js" \
   "$ROOT/fusion/agent/dist/agent-runtime.js" \
   "$ROOT/fusion/canvas.html" \
   "$ROOT/fusion/help.html" \
@@ -148,21 +182,47 @@ cp "$ROOT/fusion/vendor/ngl.js" "$RES/vendor/ngl.js"
 # 机理层模块（孤对 / 弯箭头）：canvas.html 以相对路径 workbench/*.js 加载
 ditto "$ROOT/fusion/workbench" "$RES/workbench"
 mkdir -p "$RES/agent"
-for f in app.js panel.js panel.css THIRD_PARTY_NOTICES.md; do
+for f in app.js panel.js panel.css native-renderer.js THIRD_PARTY_NOTICES.md; do
   cp "$ROOT/fusion/agent/$f" "$RES/agent/$f"
 done
 ditto "$ROOT/fusion/agent/dist" "$RES/agent/dist"
 ditto "$ROOT/ketcher-local" "$RES/ketcher-local"
 # ---- 5. Info.plist ----
+APP_DISPLAY_NAME="${APP_DISPLAY_NAME:-MolStudio}"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-local.ketcher3d.native}"
+if [ -n "${CANDIDATE_PROFILE:-}" ] && [ "$APP_BUNDLE_ID" = "local.ketcher3d.native" ]; then
+  APP_BUNDLE_ID="local.ketcher3d.native.candidate.${CANDIDATE_PROFILE}"
+fi
+
+EXTRA_PLIST_KEYS=""
+if [ -n "${CANDIDATE_PROFILE:-}" ]; then
+  EXTRA_PLIST_KEYS="${EXTRA_PLIST_KEYS}
+  <key>MolStudioIsolationProfile</key><string>${CANDIDATE_PROFILE}</string>"
+fi
+if [ -n "${CANDIDATE_PORT:-}" ]; then
+  if [ "$CANDIDATE_PORT" -gt 0 ] 2>/dev/null; then
+    EXTRA_PLIST_KEYS="${EXTRA_PLIST_KEYS}
+  <key>MolStudioDefaultPort</key><integer>${CANDIDATE_PORT}</integer>"
+  fi
+fi
+if [ -n "${CANDIDATE_DATA_FOLDER:-}" ]; then
+  EXTRA_PLIST_KEYS="${EXTRA_PLIST_KEYS}
+  <key>MolStudioDataFolderName</key><string>${CANDIDATE_DATA_FOLDER}</string>"
+fi
+if [ -n "${CANDIDATE_DEFAULTS_SUITE:-}" ]; then
+  EXTRA_PLIST_KEYS="${EXTRA_PLIST_KEYS}
+  <key>MolStudioDefaultsSuiteName</key><string>${CANDIDATE_DEFAULTS_SUITE}</string>"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>MolStudio</string>
-  <key>CFBundleDisplayName</key><string>MolStudio</string>
+  <key>CFBundleName</key><string>${APP_DISPLAY_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${APP_DISPLAY_NAME}</string>
   <key>CFBundleExecutable</key><string>MolStudio</string>
-  <key>CFBundleIdentifier</key><string>local.ketcher3d.native</string>
+  <key>CFBundleIdentifier</key><string>${APP_BUNDLE_ID}</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
@@ -173,7 +233,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleLocalizations</key><array><string>zh-Hans</string></array>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSPrincipalClass</key><string>NSApplication</string>${EXTRA_PLIST_KEYS}
 </dict>
 </plist>
 PLIST

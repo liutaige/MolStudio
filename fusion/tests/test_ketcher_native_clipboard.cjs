@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const { bundlePath, patches, patchSource } = require('../patch-ketcher-clipboard.cjs');
+const { bundlePath, patches, patchSource, legacyCommitAfter } = require('../patch-ketcher-clipboard.cjs');
 const source = fs.readFileSync(bundlePath, 'utf8');
 
 // Execute the actual pinned native handlers, rather than a second implementation
@@ -155,6 +155,11 @@ async function test(name, fn) { await fn(); passed++; process.stdout.write('PASS
     assert.throws(() => patchSource(source+'\n'), /SHA-256/);
     assert.throws(() => patchSource(source.replace(patches[0].after, patches[0].before)), /partially/);
     assert.throws(() => patchSource(source.replace(patches[0].after, 'changed upstream helper')), /anchor changed/);
+    const commit = patches.find(p => p.name.includes('exact committed history action'));
+    const legacy = source.replace(commit.after, legacyCommitAfter);
+    assert.equal(patchSource(legacy).source, source);
+    assert.equal(patchSource(legacy).changed, true);
+    assert.throws(() => patchSource(legacy + '\n'), /SHA-256/);
   });
   await test('event-data host copies the native selected fragment through native serializers and event data', () => {
     const f = fixture({ preferEvents: true }), e = event();
@@ -328,13 +333,13 @@ async function test(name, fn) { await fn(); passed++; process.stdout.write('PASS
     const fragment = { isSingleGroup:()=>false, molstudioClipboardToken:token };
     const ctx = { window:{molstudioClipboard:{
       nativePasteStart(m) { events.push(['start',m]); }, nativePasteMove(m) { events.push(['move',m]); },
-      nativePasteCommit(a,t) { assert.equal(history.at(-1), a); events.push(['commit',a,t]); },
+      nativePasteCommit(a,t) { if (a) assert.equal(history.at(-1), a); events.push(['commit',a,t]); },
       nativePasteCancel(t,temporary) { events.push(['cancel',t,temporary]); }
     }}, J:{A(){}}, B:{A(obj,key,value){obj[key]=value;}}, R:{A:a=>a},
       N:{A(C,methods){for(const m of methods)Object.defineProperty(C.prototype,m.key,{value:m.value,get:m.get,configurable:true});}},
       Z:{ CoordinateTransformation:{pageToModel:e=>({x:e.clientX,y:e.clientY})},
         fromPaste:()=>[action(),{atoms:[],bonds:[]},{},meta()], expandSGroupWithMultipleAttachmentPoint:()=>({}) },
-      Fz(){}, Uz:false, requestAnimationFrame:fn=>fn(), ms:x=>x, Vs:()=>[],
+      Fz(){}, Uz:false, requestAnimationFrame:fn=>fn(), ms:x=>x, Vs:()=>[], $Y:Object.assign,
       js(ed, merge, a){history.push(finalAction);return finalAction;} };
     // Accessor descriptors must omit "value", while ordinary methods omit "get".
     ctx.N.A = (C,methods) => { for (const m of methods) Object.defineProperty(C.prototype,m.key,
@@ -356,6 +361,13 @@ async function test(name, fn) { await fn(); passed++; process.stdout.write('PASS
     const committed=events.find(e=>Array.isArray(e)&&e[0]==='commit');
     assert.equal(committed[1],finalAction); assert.equal(committed[2],token);
     assert.equal(events.filter(e=>Array.isArray(e)&&e[0]==='cancel').length,cancelCount);
+    // Execute the actual no-action completion branch as well. Untagged native
+    // templates still need an end notification even though no sidecar exists.
+    current = new PasteTool(editor, { ...fragment, molstudioClipboardToken: undefined });
+    current.isSingleContractedGroup = true; current.mergeItems = {};
+    current.mouseup();
+    const noAction = events.filter(e=>Array.isArray(e)&&e[0]==='commit').at(-1);
+    assert.equal(noAction[1], null); assert.equal(noAction[2], undefined);
   });
   await test('native cut token is scoped to the exact deferred eraser dispatch and cleared after noop or failure', () => {
     const history = [], observed = [], ended = [];

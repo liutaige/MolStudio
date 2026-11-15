@@ -1,0 +1,1834 @@
+{
+  "generatedBy": "regression/workspace-components/gen_js_fixtures.cjs",
+  "sourceModules": [
+    "fusion/workbench/canvas-viewport.js",
+    "fusion/workbench/native-ui-bridge.js",
+    "fusion/agent/native-renderer.js"
+  ],
+  "attachReply": {
+    "ok": true,
+    "epoch": {
+      "navigationGeneration": 3,
+      "pageId": "page-3-1"
+    },
+    "sequence": 0,
+    "ownedSurfaces": [
+      "fileCommands",
+      "toolPalette",
+      "zoomPalette",
+      "inspector",
+      "agent"
+    ],
+    "state": {
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "revision": 1,
+      "ready": {
+        "canvas": true,
+        "agent": true
+      },
+      "supported": {
+        "commands": [
+          "host.context",
+          "tool.set",
+          "element.set",
+          "zoom.by",
+          "edit.undo",
+          "edit.redo",
+          "edit.selectAll",
+          "edit.delete",
+          "selection.setProperty",
+          "selection.replan",
+          "selection.toggleBondComponent",
+          "agent.send",
+          "agent.stop",
+          "agent.continue",
+          "agent.reset",
+          "agent.settings.load",
+          "agent.settings.save",
+          "document.tool",
+          "document.addImage",
+          "document.addText",
+          "document.addShape",
+          "document.object.update",
+          "document.object.duplicate",
+          "document.object.delete",
+          "document.object.editText",
+          "document.page.setup",
+          "document.page.add",
+          "document.page.removeLastBlank",
+          "document.importFile",
+          "document.exportPages",
+          "document.state",
+          "template.set"
+        ],
+        "toolIds": [
+          "select",
+          "lasso",
+          "select.structure",
+          "select.fragment",
+          "hand",
+          "erase",
+          "chain",
+          "text",
+          "chargePlus",
+          "chargeMinus",
+          "reactionPlus",
+          "bond.single",
+          "bond.double",
+          "bond.triple",
+          "bond.wedge",
+          "bond.hashed",
+          "bond.wavy",
+          "reactionArrow",
+          "equilibriumArrow",
+          "resonanceArrow",
+          "retrosyntheticArrow",
+          "electronPairArrow",
+          "fishhookArrow",
+          "lonePair",
+          "shape.rect",
+          "shape.ellipse",
+          "shape.line",
+          "document.bracket",
+          "document.arrow",
+          "document.polygon",
+          "document.roundRect",
+          "document.image",
+          "ketcher.image"
+        ],
+        "elementSymbols": [
+          "H",
+          "He",
+          "Li",
+          "Be",
+          "B",
+          "C",
+          "N",
+          "O",
+          "F",
+          "Ne",
+          "Na",
+          "Mg",
+          "Al",
+          "Si",
+          "P",
+          "S",
+          "Cl",
+          "Ar",
+          "K",
+          "Ca",
+          "Sc",
+          "Ti",
+          "V",
+          "Cr",
+          "Mn",
+          "Fe",
+          "Co",
+          "Ni",
+          "Cu",
+          "Zn",
+          "Ga",
+          "Ge",
+          "As",
+          "Se",
+          "Br",
+          "Kr",
+          "Rb",
+          "Sr",
+          "Y",
+          "Zr",
+          "Nb",
+          "Mo",
+          "Tc",
+          "Ru",
+          "Rh",
+          "Pd",
+          "Ag",
+          "Cd",
+          "In",
+          "Sn",
+          "Sb",
+          "Te",
+          "I",
+          "Xe",
+          "Cs",
+          "Ba",
+          "La",
+          "Ce",
+          "Pr",
+          "Nd",
+          "Pm",
+          "Sm",
+          "Eu",
+          "Gd",
+          "Tb",
+          "Dy",
+          "Ho",
+          "Er",
+          "Tm",
+          "Yb",
+          "Lu",
+          "Hf",
+          "Ta",
+          "W",
+          "Re",
+          "Os",
+          "Ir",
+          "Pt",
+          "Au",
+          "Hg",
+          "Tl",
+          "Pb",
+          "Bi",
+          "Po",
+          "At",
+          "Rn",
+          "Fr",
+          "Ra",
+          "Ac",
+          "Th",
+          "Pa",
+          "U",
+          "A",
+          "Q",
+          "R",
+          "M",
+          "X",
+          "D",
+          "*"
+        ],
+        "templateIds": [
+          "ring.benzene",
+          "ring.cyclohexane",
+          "ring.cyclopentane",
+          "ring.cyclopropane"
+        ]
+      },
+      "tool": {
+        "id": "select",
+        "label": "选择"
+      },
+      "selection": {
+        "revision": 0,
+        "kind": "molecule",
+        "count": 1,
+        "label": "分子结构",
+        "properties": []
+      },
+      "history": {
+        "canUndo": false,
+        "canRedo": false
+      },
+      "viewport": {
+        "mode": "canvas",
+        "percent": null,
+        "cssSize": {
+          "width": 1024,
+          "height": 768
+        },
+        "appliedHostLayoutRevision": 0
+      },
+      "agent": {
+        "running": false,
+        "pendingStart": false,
+        "canContinue": false,
+        "settingsBusy": false
+      },
+      "document": {
+        "mode": "canvas",
+        "pageCount": 1,
+        "size": "A4",
+        "orientation": "portrait",
+        "marginMm": 12,
+        "canRemoveLastPage": false
+      },
+      "host": {
+        "windowKey": true,
+        "focusOwner": "canvas",
+        "inspectorVisible": true,
+        "visibleFrame": {
+          "left": 0,
+          "top": 0,
+          "right": 1024,
+          "bottom": 768
+        }
+      }
+    }
+  },
+  "settingsLoadReply": {
+    "protocol": 1,
+    "epoch": {
+      "navigationGeneration": 3,
+      "pageId": "page-3-1"
+    },
+    "requestId": "req-settings-load",
+    "ok": true,
+    "result": {
+      "config": {
+        "provider": "openai-compatible",
+        "baseUrl": "https://api.example.invalid/v1",
+        "model": "deepseek-reasoner",
+        "configured": true,
+        "generation": {
+          "profile": "deepseek",
+          "effort": "low",
+          "maxOutputTokens": 16384
+        },
+        "generationCapabilities": {
+          "openaiModels": {
+            "gpt-5.4": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "gpt-5.1": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        }
+      }
+    },
+    "stateRevision": 12
+  },
+  "postAttachMessages": [
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 1,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 2,
+        "resetGeneration": 0,
+        "mode": "snapshot",
+        "snapshot": {
+          "messages": [],
+          "runs": [],
+          "config": {
+            "configured": true,
+            "provider": "openai-compatible",
+            "model": "deepseek-v4.1-flash",
+            "baseUrl": "https://api.example.invalid/v1",
+            "generation": {
+              "profile": "deepseek",
+              "effort": "low",
+              "maxOutputTokens": 16384
+            },
+            "generationCapabilities": {
+              "openaiModels": {
+                "gpt-5.4": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ],
+                "gpt-5.1": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            }
+          },
+          "status": "",
+          "error": null,
+          "running": false,
+          "canContinue": false,
+          "settingsVisible": false,
+          "checkpoint": null,
+          "transport": null
+        },
+        "reset": true
+      }
+    }
+  ],
+  "canvasMessages": [
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 2,
+      "kind": "state",
+      "payload": {
+        "protocol": 1,
+        "epoch": {
+          "navigationGeneration": 3,
+          "pageId": "page-3-1"
+        },
+        "revision": 5,
+        "ready": {
+          "canvas": true,
+          "agent": true
+        },
+        "supported": {
+          "commands": [
+            "host.context",
+            "tool.set",
+            "element.set",
+            "zoom.by",
+            "edit.undo",
+            "edit.redo",
+            "edit.selectAll",
+            "edit.delete",
+            "selection.setProperty",
+            "selection.replan",
+            "selection.toggleBondComponent",
+            "agent.send",
+            "agent.stop",
+            "agent.continue",
+            "agent.reset",
+            "agent.settings.load",
+            "agent.settings.save",
+            "document.tool",
+            "document.addImage",
+            "document.addText",
+            "document.addShape",
+            "document.object.update",
+            "document.object.duplicate",
+            "document.object.delete",
+            "document.object.editText",
+            "document.page.setup",
+            "document.page.add",
+            "document.page.removeLastBlank",
+            "document.importFile",
+            "document.exportPages",
+            "document.state",
+            "template.set"
+          ],
+          "toolIds": [
+            "select",
+            "lasso",
+            "select.structure",
+            "select.fragment",
+            "hand",
+            "erase",
+            "chain",
+            "text",
+            "chargePlus",
+            "chargeMinus",
+            "reactionPlus",
+            "bond.single",
+            "bond.double",
+            "bond.triple",
+            "bond.wedge",
+            "bond.hashed",
+            "bond.wavy",
+            "reactionArrow",
+            "equilibriumArrow",
+            "resonanceArrow",
+            "retrosyntheticArrow",
+            "electronPairArrow",
+            "fishhookArrow",
+            "lonePair",
+            "shape.rect",
+            "shape.ellipse",
+            "shape.line",
+            "document.bracket",
+            "document.arrow",
+            "document.polygon",
+            "document.roundRect",
+            "document.image",
+            "ketcher.image"
+          ],
+          "elementSymbols": [
+            "H",
+            "He",
+            "Li",
+            "Be",
+            "B",
+            "C",
+            "N",
+            "O",
+            "F",
+            "Ne",
+            "Na",
+            "Mg",
+            "Al",
+            "Si",
+            "P",
+            "S",
+            "Cl",
+            "Ar",
+            "K",
+            "Ca",
+            "Sc",
+            "Ti",
+            "V",
+            "Cr",
+            "Mn",
+            "Fe",
+            "Co",
+            "Ni",
+            "Cu",
+            "Zn",
+            "Ga",
+            "Ge",
+            "As",
+            "Se",
+            "Br",
+            "Kr",
+            "Rb",
+            "Sr",
+            "Y",
+            "Zr",
+            "Nb",
+            "Mo",
+            "Tc",
+            "Ru",
+            "Rh",
+            "Pd",
+            "Ag",
+            "Cd",
+            "In",
+            "Sn",
+            "Sb",
+            "Te",
+            "I",
+            "Xe",
+            "Cs",
+            "Ba",
+            "La",
+            "Ce",
+            "Pr",
+            "Nd",
+            "Pm",
+            "Sm",
+            "Eu",
+            "Gd",
+            "Tb",
+            "Dy",
+            "Ho",
+            "Er",
+            "Tm",
+            "Yb",
+            "Lu",
+            "Hf",
+            "Ta",
+            "W",
+            "Re",
+            "Os",
+            "Ir",
+            "Pt",
+            "Au",
+            "Hg",
+            "Tl",
+            "Pb",
+            "Bi",
+            "Po",
+            "At",
+            "Rn",
+            "Fr",
+            "Ra",
+            "Ac",
+            "Th",
+            "Pa",
+            "U",
+            "A",
+            "Q",
+            "R",
+            "M",
+            "X",
+            "D",
+            "*"
+          ],
+          "templateIds": [
+            "ring.benzene",
+            "ring.cyclohexane",
+            "ring.cyclopentane",
+            "ring.cyclopropane"
+          ]
+        },
+        "tool": {
+          "id": "ring.benzene",
+          "label": "模板 苯环"
+        },
+        "selection": {
+          "revision": 1,
+          "kind": "molecule",
+          "count": 1,
+          "label": "分子结构",
+          "properties": []
+        },
+        "history": {
+          "canUndo": false,
+          "canRedo": false
+        },
+        "viewport": {
+          "mode": "canvas",
+          "percent": null,
+          "cssSize": {
+            "width": 1024,
+            "height": 768
+          },
+          "appliedHostLayoutRevision": 1
+        },
+        "agent": {
+          "running": false,
+          "pendingStart": false,
+          "canContinue": false,
+          "settingsBusy": false
+        },
+        "document": {
+          "mode": "canvas",
+          "pageCount": 1,
+          "size": "A4",
+          "orientation": "portrait",
+          "marginMm": 12,
+          "canRemoveLastPage": false
+        },
+        "host": {
+          "windowKey": true,
+          "focusOwner": "canvas",
+          "inspectorVisible": true,
+          "visibleFrame": {
+            "left": 56,
+            "top": 0,
+            "right": 1440,
+            "bottom": 960
+          }
+        }
+      }
+    }
+  ],
+  "paperMessages": [
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 3,
+      "kind": "state",
+      "payload": {
+        "protocol": 1,
+        "epoch": {
+          "navigationGeneration": 3,
+          "pageId": "page-3-1"
+        },
+        "revision": 9,
+        "ready": {
+          "canvas": true,
+          "agent": true
+        },
+        "supported": {
+          "commands": [
+            "host.context",
+            "tool.set",
+            "element.set",
+            "zoom.by",
+            "edit.undo",
+            "edit.redo",
+            "edit.selectAll",
+            "edit.delete",
+            "selection.setProperty",
+            "selection.replan",
+            "selection.toggleBondComponent",
+            "agent.send",
+            "agent.stop",
+            "agent.continue",
+            "agent.reset",
+            "agent.settings.load",
+            "agent.settings.save",
+            "document.tool",
+            "document.addImage",
+            "document.addText",
+            "document.addShape",
+            "document.object.update",
+            "document.object.duplicate",
+            "document.object.delete",
+            "document.object.editText",
+            "document.page.setup",
+            "document.page.add",
+            "document.page.removeLastBlank",
+            "document.importFile",
+            "document.exportPages",
+            "document.state",
+            "template.set",
+            "zoom.toPercent",
+            "zoom.fit"
+          ],
+          "toolIds": [
+            "select",
+            "lasso",
+            "select.structure",
+            "select.fragment",
+            "hand",
+            "erase",
+            "chain",
+            "text",
+            "chargePlus",
+            "chargeMinus",
+            "reactionPlus",
+            "bond.single",
+            "bond.double",
+            "bond.triple",
+            "bond.wedge",
+            "bond.hashed",
+            "bond.wavy",
+            "reactionArrow",
+            "equilibriumArrow",
+            "resonanceArrow",
+            "retrosyntheticArrow",
+            "electronPairArrow",
+            "fishhookArrow",
+            "lonePair",
+            "shape.rect",
+            "shape.ellipse",
+            "shape.line",
+            "document.bracket",
+            "document.arrow",
+            "document.polygon",
+            "document.roundRect",
+            "document.image",
+            "ketcher.image"
+          ],
+          "elementSymbols": [
+            "H",
+            "He",
+            "Li",
+            "Be",
+            "B",
+            "C",
+            "N",
+            "O",
+            "F",
+            "Ne",
+            "Na",
+            "Mg",
+            "Al",
+            "Si",
+            "P",
+            "S",
+            "Cl",
+            "Ar",
+            "K",
+            "Ca",
+            "Sc",
+            "Ti",
+            "V",
+            "Cr",
+            "Mn",
+            "Fe",
+            "Co",
+            "Ni",
+            "Cu",
+            "Zn",
+            "Ga",
+            "Ge",
+            "As",
+            "Se",
+            "Br",
+            "Kr",
+            "Rb",
+            "Sr",
+            "Y",
+            "Zr",
+            "Nb",
+            "Mo",
+            "Tc",
+            "Ru",
+            "Rh",
+            "Pd",
+            "Ag",
+            "Cd",
+            "In",
+            "Sn",
+            "Sb",
+            "Te",
+            "I",
+            "Xe",
+            "Cs",
+            "Ba",
+            "La",
+            "Ce",
+            "Pr",
+            "Nd",
+            "Pm",
+            "Sm",
+            "Eu",
+            "Gd",
+            "Tb",
+            "Dy",
+            "Ho",
+            "Er",
+            "Tm",
+            "Yb",
+            "Lu",
+            "Hf",
+            "Ta",
+            "W",
+            "Re",
+            "Os",
+            "Ir",
+            "Pt",
+            "Au",
+            "Hg",
+            "Tl",
+            "Pb",
+            "Bi",
+            "Po",
+            "At",
+            "Rn",
+            "Fr",
+            "Ra",
+            "Ac",
+            "Th",
+            "Pa",
+            "U",
+            "A",
+            "Q",
+            "R",
+            "M",
+            "X",
+            "D",
+            "*"
+          ],
+          "templateIds": [
+            "ring.benzene",
+            "ring.cyclohexane",
+            "ring.cyclopentane",
+            "ring.cyclopropane"
+          ]
+        },
+        "tool": {
+          "id": "ring.benzene",
+          "label": "模板 苯环"
+        },
+        "selection": {
+          "revision": 1,
+          "kind": "molecule",
+          "count": 1,
+          "label": "分子结构",
+          "properties": []
+        },
+        "history": {
+          "canUndo": false,
+          "canRedo": false
+        },
+        "viewport": {
+          "mode": "paper",
+          "percent": 150,
+          "cssSize": {
+            "width": 1024,
+            "height": 768
+          },
+          "appliedHostLayoutRevision": 1
+        },
+        "agent": {
+          "running": false,
+          "pendingStart": false,
+          "canContinue": false,
+          "settingsBusy": false
+        },
+        "document": {
+          "mode": "paper",
+          "pageCount": 2,
+          "size": "A4",
+          "orientation": "portrait",
+          "marginMm": 12,
+          "canRemoveLastPage": true
+        },
+        "host": {
+          "windowKey": true,
+          "focusOwner": "canvas",
+          "inspectorVisible": true,
+          "visibleFrame": {
+            "left": 56,
+            "top": 0,
+            "right": 1440,
+            "bottom": 960
+          }
+        }
+      }
+    }
+  ],
+  "agentRunMessages": [
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 4,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 3,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "user_message",
+          "messageId": "user-1",
+          "text": "画出咖啡因两条独立机理路线"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 5,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 4,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "run_start",
+          "runId": "run-real-1",
+          "status": "running",
+          "external": false
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 6,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 5,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "task_checkpoint",
+          "checkpoint": {
+            "goal": "咖啡因双路线机理",
+            "status": "running",
+            "phaseIndex": 0,
+            "phases": [
+              {
+                "objective": "路线 A",
+                "status": "running"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 7,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 6,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "generation_applied",
+          "generation": {
+            "requested": {
+              "profile": "deepseek",
+              "effort": "max",
+              "maxOutputTokens": 32768
+            },
+            "fields": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          },
+          "requested": {
+            "profile": "deepseek",
+            "effort": "max",
+            "maxOutputTokens": 32768
+          }
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 8,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 7,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "thinking_delta",
+          "runId": "run-real-1",
+          "source": "model",
+          "delta": "规划路线 A 与路线 B。"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 9,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 8,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "phase_start",
+          "runId": "run-real-1",
+          "phaseIndex": 1,
+          "objective": "绘制茶碱去质子化路线"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 10,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 9,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "tool_start",
+          "runId": "run-real-1",
+          "toolCallId": "tc-real-1",
+          "toolName": "draw_operations",
+          "name": "draw_operations",
+          "label": "绘制步骤",
+          "state": "running",
+          "completedOperations": 2,
+          "summary": ""
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 11,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 10,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "tool_progress",
+          "runId": "run-real-1",
+          "toolCallId": "tc-real-1",
+          "toolName": "draw_operations",
+          "name": "draw_operations",
+          "state": "running",
+          "progress": {
+            "phase": "committed",
+            "count": 2
+          },
+          "summary": ""
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 12,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 11,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "tool_end",
+          "runId": "run-real-1",
+          "toolCallId": "tc-real-1",
+          "toolName": "draw_operations",
+          "name": "draw_operations",
+          "label": "绘制步骤",
+          "state": "incomplete",
+          "success": true,
+          "finishRejected": true,
+          "completedOperations": 2,
+          "summary": "需要补全电子流",
+          "changes": [
+            "已放置茶碱"
+          ],
+          "diagnostic": {
+            "code": "incomplete_mechanism"
+          }
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 13,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 12,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "tool_start",
+          "runId": "run-real-1",
+          "toolCallId": "tc-real-fail",
+          "toolName": "inspect_structures",
+          "name": "inspect_structures",
+          "label": "检查结构",
+          "state": "running",
+          "summary": ""
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 14,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 13,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "tool_end",
+          "runId": "run-real-1",
+          "toolCallId": "tc-real-fail",
+          "toolName": "inspect_structures",
+          "name": "inspect_structures",
+          "label": "检查结构",
+          "state": "failed",
+          "success": false,
+          "summary": "结构解析失败",
+          "diagnostic": {
+            "code": "invalid_smiles"
+          }
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 15,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 14,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "step_commit",
+          "runId": "run-real-1"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 16,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 15,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "phase_end",
+          "runId": "run-real-1",
+          "phaseIndex": 1,
+          "summary": "完成路线 A 首步"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 17,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 16,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "assistant_start",
+          "runId": "run-real-1",
+          "messageId": "assistant-1"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 18,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 17,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "text_delta",
+          "runId": "run-real-1",
+          "messageId": "assistant-1",
+          "delta": "已完成第一步反应箭头。"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 19,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 18,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "text_delta",
+          "runId": "run-real-1",
+          "hidden": true,
+          "channel": "analysis"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 20,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 19,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "assistant_end",
+          "runId": "run-real-1"
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 21,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 20,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "run_end",
+          "runId": "run-real-1",
+          "status": "incomplete",
+          "reason": "recovery_exhausted",
+          "canContinue": true,
+          "usage": {}
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 22,
+      "kind": "agent",
+      "payload": {
+        "rendererRevision": 21,
+        "resetGeneration": 0,
+        "mode": "event",
+        "event": {
+          "type": "config",
+          "config": {
+            "configured": true,
+            "provider": "openai-compatible",
+            "model": "deepseek-reasoner",
+            "baseUrl": "https://api.example.invalid/v1",
+            "generation": {
+              "profile": "deepseek",
+              "effort": "low",
+              "maxOutputTokens": 16384
+            },
+            "generationCapabilities": {
+              "openaiModels": {
+                "gpt-5.4": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ],
+                "gpt-5.1": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "act": "nativeUI",
+      "protocol": 1,
+      "epoch": {
+        "navigationGeneration": 3,
+        "pageId": "page-3-1"
+      },
+      "sequence": 23,
+      "kind": "state",
+      "payload": {
+        "protocol": 1,
+        "epoch": {
+          "navigationGeneration": 3,
+          "pageId": "page-3-1"
+        },
+        "revision": 11,
+        "ready": {
+          "canvas": true,
+          "agent": true
+        },
+        "supported": {
+          "commands": [
+            "host.context",
+            "tool.set",
+            "element.set",
+            "zoom.by",
+            "edit.undo",
+            "edit.redo",
+            "edit.selectAll",
+            "edit.delete",
+            "selection.setProperty",
+            "selection.replan",
+            "selection.toggleBondComponent",
+            "agent.send",
+            "agent.stop",
+            "agent.continue",
+            "agent.reset",
+            "agent.settings.load",
+            "agent.settings.save",
+            "document.tool",
+            "document.addImage",
+            "document.addText",
+            "document.addShape",
+            "document.object.update",
+            "document.object.duplicate",
+            "document.object.delete",
+            "document.object.editText",
+            "document.page.setup",
+            "document.page.add",
+            "document.page.removeLastBlank",
+            "document.importFile",
+            "document.exportPages",
+            "document.state",
+            "template.set",
+            "zoom.toPercent",
+            "zoom.fit"
+          ],
+          "toolIds": [
+            "select",
+            "lasso",
+            "select.structure",
+            "select.fragment",
+            "hand",
+            "erase",
+            "chain",
+            "text",
+            "chargePlus",
+            "chargeMinus",
+            "reactionPlus",
+            "bond.single",
+            "bond.double",
+            "bond.triple",
+            "bond.wedge",
+            "bond.hashed",
+            "bond.wavy",
+            "reactionArrow",
+            "equilibriumArrow",
+            "resonanceArrow",
+            "retrosyntheticArrow",
+            "electronPairArrow",
+            "fishhookArrow",
+            "lonePair",
+            "shape.rect",
+            "shape.ellipse",
+            "shape.line",
+            "document.bracket",
+            "document.arrow",
+            "document.polygon",
+            "document.roundRect",
+            "document.image",
+            "ketcher.image"
+          ],
+          "elementSymbols": [
+            "H",
+            "He",
+            "Li",
+            "Be",
+            "B",
+            "C",
+            "N",
+            "O",
+            "F",
+            "Ne",
+            "Na",
+            "Mg",
+            "Al",
+            "Si",
+            "P",
+            "S",
+            "Cl",
+            "Ar",
+            "K",
+            "Ca",
+            "Sc",
+            "Ti",
+            "V",
+            "Cr",
+            "Mn",
+            "Fe",
+            "Co",
+            "Ni",
+            "Cu",
+            "Zn",
+            "Ga",
+            "Ge",
+            "As",
+            "Se",
+            "Br",
+            "Kr",
+            "Rb",
+            "Sr",
+            "Y",
+            "Zr",
+            "Nb",
+            "Mo",
+            "Tc",
+            "Ru",
+            "Rh",
+            "Pd",
+            "Ag",
+            "Cd",
+            "In",
+            "Sn",
+            "Sb",
+            "Te",
+            "I",
+            "Xe",
+            "Cs",
+            "Ba",
+            "La",
+            "Ce",
+            "Pr",
+            "Nd",
+            "Pm",
+            "Sm",
+            "Eu",
+            "Gd",
+            "Tb",
+            "Dy",
+            "Ho",
+            "Er",
+            "Tm",
+            "Yb",
+            "Lu",
+            "Hf",
+            "Ta",
+            "W",
+            "Re",
+            "Os",
+            "Ir",
+            "Pt",
+            "Au",
+            "Hg",
+            "Tl",
+            "Pb",
+            "Bi",
+            "Po",
+            "At",
+            "Rn",
+            "Fr",
+            "Ra",
+            "Ac",
+            "Th",
+            "Pa",
+            "U",
+            "A",
+            "Q",
+            "R",
+            "M",
+            "X",
+            "D",
+            "*"
+          ],
+          "templateIds": [
+            "ring.benzene",
+            "ring.cyclohexane",
+            "ring.cyclopentane",
+            "ring.cyclopropane"
+          ]
+        },
+        "tool": {
+          "id": "ring.benzene",
+          "label": "模板 苯环"
+        },
+        "selection": {
+          "revision": 1,
+          "kind": "molecule",
+          "count": 1,
+          "label": "分子结构",
+          "properties": []
+        },
+        "history": {
+          "canUndo": false,
+          "canRedo": false
+        },
+        "viewport": {
+          "mode": "paper",
+          "percent": 150,
+          "cssSize": {
+            "width": 1024,
+            "height": 768
+          },
+          "appliedHostLayoutRevision": 1
+        },
+        "agent": {
+          "running": false,
+          "pendingStart": false,
+          "canContinue": true,
+          "settingsBusy": false
+        },
+        "document": {
+          "mode": "paper",
+          "pageCount": 2,
+          "size": "A4",
+          "orientation": "portrait",
+          "marginMm": 12,
+          "canRemoveLastPage": true
+        },
+        "host": {
+          "windowKey": true,
+          "focusOwner": "canvas",
+          "inspectorVisible": true,
+          "visibleFrame": {
+            "left": 56,
+            "top": 0,
+            "right": 1440,
+            "bottom": 960
+          }
+        }
+      }
+    }
+  ],
+  "finalState": {
+    "protocol": 1,
+    "epoch": {
+      "navigationGeneration": 3,
+      "pageId": "page-3-1"
+    },
+    "revision": 12,
+    "ready": {
+      "canvas": true,
+      "agent": true
+    },
+    "supported": {
+      "commands": [
+        "host.context",
+        "tool.set",
+        "element.set",
+        "zoom.by",
+        "edit.undo",
+        "edit.redo",
+        "edit.selectAll",
+        "edit.delete",
+        "selection.setProperty",
+        "selection.replan",
+        "selection.toggleBondComponent",
+        "agent.send",
+        "agent.stop",
+        "agent.continue",
+        "agent.reset",
+        "agent.settings.load",
+        "agent.settings.save",
+        "document.tool",
+        "document.addImage",
+        "document.addText",
+        "document.addShape",
+        "document.object.update",
+        "document.object.duplicate",
+        "document.object.delete",
+        "document.object.editText",
+        "document.page.setup",
+        "document.page.add",
+        "document.page.removeLastBlank",
+        "document.importFile",
+        "document.exportPages",
+        "document.state",
+        "template.set"
+      ],
+      "toolIds": [
+        "select",
+        "lasso",
+        "select.structure",
+        "select.fragment",
+        "hand",
+        "erase",
+        "chain",
+        "text",
+        "chargePlus",
+        "chargeMinus",
+        "reactionPlus",
+        "bond.single",
+        "bond.double",
+        "bond.triple",
+        "bond.wedge",
+        "bond.hashed",
+        "bond.wavy",
+        "reactionArrow",
+        "equilibriumArrow",
+        "resonanceArrow",
+        "retrosyntheticArrow",
+        "electronPairArrow",
+        "fishhookArrow",
+        "lonePair",
+        "shape.rect",
+        "shape.ellipse",
+        "shape.line",
+        "document.bracket",
+        "document.arrow",
+        "document.polygon",
+        "document.roundRect",
+        "document.image",
+        "ketcher.image"
+      ],
+      "elementSymbols": [
+        "H",
+        "He",
+        "Li",
+        "Be",
+        "B",
+        "C",
+        "N",
+        "O",
+        "F",
+        "Ne",
+        "Na",
+        "Mg",
+        "Al",
+        "Si",
+        "P",
+        "S",
+        "Cl",
+        "Ar",
+        "K",
+        "Ca",
+        "Sc",
+        "Ti",
+        "V",
+        "Cr",
+        "Mn",
+        "Fe",
+        "Co",
+        "Ni",
+        "Cu",
+        "Zn",
+        "Ga",
+        "Ge",
+        "As",
+        "Se",
+        "Br",
+        "Kr",
+        "Rb",
+        "Sr",
+        "Y",
+        "Zr",
+        "Nb",
+        "Mo",
+        "Tc",
+        "Ru",
+        "Rh",
+        "Pd",
+        "Ag",
+        "Cd",
+        "In",
+        "Sn",
+        "Sb",
+        "Te",
+        "I",
+        "Xe",
+        "Cs",
+        "Ba",
+        "La",
+        "Ce",
+        "Pr",
+        "Nd",
+        "Pm",
+        "Sm",
+        "Eu",
+        "Gd",
+        "Tb",
+        "Dy",
+        "Ho",
+        "Er",
+        "Tm",
+        "Yb",
+        "Lu",
+        "Hf",
+        "Ta",
+        "W",
+        "Re",
+        "Os",
+        "Ir",
+        "Pt",
+        "Au",
+        "Hg",
+        "Tl",
+        "Pb",
+        "Bi",
+        "Po",
+        "At",
+        "Rn",
+        "Fr",
+        "Ra",
+        "Ac",
+        "Th",
+        "Pa",
+        "U",
+        "A",
+        "Q",
+        "R",
+        "M",
+        "X",
+        "D",
+        "*"
+      ],
+      "templateIds": [
+        "ring.benzene",
+        "ring.cyclohexane",
+        "ring.cyclopentane",
+        "ring.cyclopropane"
+      ]
+    },
+    "tool": {
+      "id": "ring.benzene",
+      "label": "模板 苯环"
+    },
+    "selection": {
+      "revision": 1,
+      "kind": "molecule",
+      "count": 1,
+      "label": "分子结构",
+      "properties": []
+    },
+    "history": {
+      "canUndo": false,
+      "canRedo": false
+    },
+    "viewport": {
+      "mode": "canvas",
+      "percent": null,
+      "cssSize": {
+        "width": 1024,
+        "height": 768
+      },
+      "appliedHostLayoutRevision": 1
+    },
+    "agent": {
+      "running": false,
+      "pendingStart": false,
+      "canContinue": true,
+      "settingsBusy": false
+    },
+    "document": {
+      "mode": "canvas",
+      "pageCount": 2,
+      "size": "A4",
+      "orientation": "portrait",
+      "marginMm": 12,
+      "canRemoveLastPage": false
+    },
+    "host": {
+      "windowKey": true,
+      "focusOwner": "canvas",
+      "inspectorVisible": true,
+      "visibleFrame": {
+        "left": 56,
+        "top": 0,
+        "right": 1440,
+        "bottom": 960
+      }
+    }
+  }
+}

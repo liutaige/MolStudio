@@ -7,7 +7,7 @@ bash fusion-native/regression/run.sh
 OUT_DIR=/tmp/my-run bash fusion-native/regression/run.sh
 ```
 
-当前用例：**210 项控制流断言 + 11 项真实方法生成的 JavaScript 快照/导出断言**。生成物写在 `OUT_DIR`（默认 `/tmp/molstudio-regression`），不进入源码历史。
+当前用例：**241 项控制流断言 + 11 项真实方法生成的 JavaScript 快照/导出断言**。生成物写在 `OUT_DIR`（默认 `/tmp/molstudio-regression`），不进入源码历史。
 
 - 修改 `applicationShouldTerminate`、`confirmDiscard`、`startNavigation`、`abortNavigation`、`applyPending`、`saveSession` 或 `fetchSnapshot` 后重跑。
 - 关闭与退出覆盖：保存/不保存/取消、真实写盘失败、迟到轮询、关闭后新建/打开、欢迎页退出及读取失败的明确放弃入口。
@@ -19,7 +19,7 @@ OUT_DIR=/tmp/my-run bash fusion-native/regression/run.sh
 
 2026-11-11 整理移除了旧 ChemDoodle 页面及双模式会话。原 189 项中退休了39条仅针对旧文档/跨模式行为的断言，新增8条单画布恢复、打开失败回退和拒绝旧格式的断言。当前画布保存竞态与快照一致性覆盖继续保留。
 
-这些是方法级控制流测试，不能替代最终应用的真实 AppKit 面板、快捷键、WebKit 加载及画布截图验收。独立纸页文档应用不属于此套测试。
+这些是方法级控制流测试，不能替代最终应用的真实 AppKit 面板、快捷键、WebKit 加载及画布截图验收。此套测试包含当前画布的纸页初始化、失败回退与完整文档保存控制流；本地研究目录中的独立 `.molnote` 文档应用不属于此套测试。
 
 ## 文件打开保护
 
@@ -33,3 +33,48 @@ MOLSTUDIO_PORT=48975 env -u ELECTRON_RUN_AS_NODE fusion/node_modules/.bin/electr
 ```
 
 默认将截图、可编辑 `.molwork` 和报告放在 fixtures 下的 `workbench-open/`；使用 `MOLSTUDIO_NATIVE_TEST_OUT` 指定其他输出目录。
+
+## 当前画布：PDF 与原生自测
+
+PDF 纯数据和字形映射测试不调用模型；WebKit 探针逐页捕获并合并为矢量 PDF，检查纸张尺寸、重复导出、图片及中文选择。运行环境需允许本机 WebKit 使用 macOS 服务：
+
+```sh
+fusion-native/regression/document-pdf/unit.sh
+fusion-native/regression/document-pdf/run.sh
+```
+
+用真实画布的 `await k3dAPI.document.exportPages()` 返回值（完整 `{ok,pages,warnings}` JSON）检查 WK PDF，两次输出写入独立目录：
+
+```sh
+MOLSTUDIO_PDF_PAGES_JSON=/absolute/path/to/pages.json \
+  MOLSTUDIO_PDF_OUT_DIR=/absolute/path/to/pdf-artifacts \
+  MOLSTUDIO_TEST_BUILD=/absolute/path/to/tested.app \
+  MOLSTUDIO_PDF_EXPECT_TEXT='预期文字' \
+  fusion-native/regression/document-pdf/run.sh
+```
+
+查看 `report.json`、两份 PDF 和逐页渲染；无法安全确认中文映射或页资源时导出应失败，不应视为成功。
+
+`MOLSTUDIO_SELFTEST=document` 与 `MOLSTUDIO_SELFTEST=clipboard` 只存在于用 `-D MOLSTUDIO_SELFTEST` 编译的原生自测包中。使用隔离 bundle ID、独立服务端口和新的输出路径，避免影响日常应用和最近文件。将下例可执行文件替换成实际的隔离自测 `.app`：
+
+```sh
+MOLSTUDIO_SELFTEST_PORT=49185 MOLSTUDIO_SELFTEST=document \
+  MOLSTUDIO_SELFTEST_OUT=/absolute/path/to/report.json \
+  MOLSTUDIO_SELFTEST_SAVE=/absolute/path/to/new-paper.molwork \
+  MOLSTUDIO_SELFTEST_WELCOME_PNG=/absolute/path/to/welcome.png \
+  MOLSTUDIO_SELFTEST_CANVAS_PNG=/absolute/path/to/canvas.png \
+  MOLSTUDIO_SELFTEST_PAGES_JSON=/absolute/path/to/pages.json \
+  /absolute/path/to/MolStudio-Selftest.app/Contents/MacOS/MolStudio
+```
+
+保存目标必须不存在。自测从真实欢迎页触发新纸页，验证初始干净状态、F01 机理与中文/图片/形状、原生保存重开与可编辑状态；截图与页 JSON 使用指定路径。它是自测构建，不代表正式 `.app` 的窗口或所有鼠标操作已验收。欢迎组件的独立宿主另见 [welcome-component](welcome-component/README.md)，实际证据与构建标签见 [文档模式结果](../../fusion/DOCUMENT_MODE_RESULTS.md)。
+
+## 原生工作区组件与跨语言契约夹具
+
+验证原生 Split/Inspector/Agent/Toolbar 组件与真实 JS 桥接器（`canvas-viewport.js`、`native-ui-bridge.js`、`native-renderer.js`）之间的序列化、状态机收敛与脱敏契约：
+
+```sh
+bash fusion-native/regression/workspace-components/run.sh
+```
+
+脚本先用 `fusion-native/regression/workspace-components/gen_js_fixtures.cjs` 在真实 JSDOM 中执行 JS 桥接与渲染器并生成最新 `fixtures/contract-fixtures.json`（含嵌套敏感字段脱敏夹具），再用 macOS 14.0 + Xcode SDK（`--build-system native`，`vtool` 验证 `minos 14.0` 与当前 `sdk`）编译运行 `WorkspaceComponentTests.swift`（当前 13 项分组用例，含 `RealJSFixtureCrossLanguageDecodeAndStateSync` 与 `IntegrationReviewFocusAndAppearanceFixes`）。

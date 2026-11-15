@@ -41,6 +41,7 @@
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || '模型设置保存失败');
     config = value;
+    panel?.setConfig?.(value);
     return value;
   }
 
@@ -60,7 +61,26 @@
     root.MolWorkbench?.app?.controller?.render?.();
   }
 
-  function ownsFocus() { return !!panel?.ownsFocus?.(); }
+  function isNativePanel(target) {
+    return typeof root.MolStudioAgentNativeRenderer === 'function' && target instanceof root.MolStudioAgentNativeRenderer;
+  }
+  function isBrowserPanel(target) {
+    return typeof root.MolStudioAgentPanel === 'function' && target instanceof root.MolStudioAgentPanel;
+  }
+
+  function ownsFocus() {
+    if (panel?.ownsFocus?.()) return true;
+    // Native AI input: the host reports windowKey + focusOwner through
+    // host.context; browser "blur" must not mean the app is inactive.
+    if (isNativePanel(panel)) return panel.ownsFocus();
+    return false;
+  }
+  function nativeHostWindowKey() {
+    try {
+      const state = root.k3dAPI?.nativeUI?.getState?.();
+      return !!(state && state.host && state.host.windowKey);
+    } catch { return false; }
+  }
   function textCommand(name) {
     const active = document.activeElement;
     if (name === 'selectAll' && active && panel?.element.contains(active) && typeof active.select === 'function') {
@@ -133,22 +153,31 @@
   async function startRequest(action) {
     const generation = ++requestGeneration;
     pendingStart = true;
+    panel?.onStateChange?.();
     try {
       const activeRuntime = await setup();
       if (generation !== requestGeneration) return { status: 'stopped' };
       pendingStart = false;
+      panel?.onStateChange?.();
       const result = await action(activeRuntime);
       if (generation === requestGeneration && result.status === 'setup_required') panel?.showSettings?.();
       return result;
     } finally {
       if (generation === requestGeneration) pendingStart = false;
+      panel?.onStateChange?.();
     }
   }
-  const send = text => startRequest(activeRuntime => activeRuntime.run(text));
+  const send = text => {
+    if (isNativePanel(panel)) {
+      panel.handleEvent({ type: 'user_message', text });
+    }
+    return startRequest(activeRuntime => activeRuntime.run(text));
+  };
   function stop(reason = 'user') {
     const wasPending = pendingStart;
     requestGeneration++; pendingStart = false;
     if (wasPending && !runtime?.isRunning) panel?.handleEvent({ type: 'run_end', status: 'stopped', reason, canContinue: false });
+    panel?.onStateChange?.();
     return runtime?.stop(reason);
   }
 
@@ -163,7 +192,7 @@
 
   function postExternalStatus() {
     if (!externalBridgeActive || panel?.disposed || typeof root.fetch !== 'function') return Promise.resolve();
-    const focused = (typeof document.hasFocus === 'function' ? document.hasFocus() : true) && document.visibilityState !== 'hidden';
+    const focused = ((typeof document.hasFocus === 'function' ? document.hasFocus() : true) || nativeHostWindowKey()) && document.visibilityState !== 'hidden';
     const busy = !!(pendingStart || runtime?.isRunning || activeExternalRequestId);
     const sessionId = String(runtime?._externalRun?.sessionId || lastKnownSessionId || '');
     return root.fetch('/api/agent/external/status', {
@@ -305,9 +334,8 @@
     postExternalStatus();
   }
 
-  function mount() {
-    if (!root.MolStudioAgentPanel) return;
-    panel = new root.MolStudioAgentPanel({
+  function createPanel() {
+    return new root.MolStudioAgentPanel({
       container: document.body,
       onSend: send,
       onStop: () => stop(),
@@ -317,15 +345,64 @@
       onSettingsSave: saveConfig,
       onToggle: () => updateLayout(),
     });
+  }
+
+  /* Native renderer lifecycle (contract §6): swap the presentation interface
+   * only. The single runtime, the pending request, checkpoints and the external
+   * bridge are untouched; toggling the native panel never destroys the runtime
+   * and never shrinks the iframe (renderer getLayout width is 0). */
+  function useNativeRenderer(renderer) {
+    if (!isNativePanel(renderer)) return false;
+    if (panel === renderer) return true;
+    if (panel && typeof panel.destroy === 'function' && !isNativePanel(panel)) panel.destroy();
+    panel = renderer;
+    if (config) panel.setConfig(config);
+    if (runtime) {
+      if (runtime.checkpoint) panel.handleEvent({ type: 'task_checkpoint', checkpoint: runtime.checkpoint });
+      if (runtime.canContinue && !runtime.isRunning) panel.handleEvent({ type: 'resume_available', reason: 'saved_task' });
+    }
+    updateLayout();
+    return true;
+  }
+  function restoreBrowserRenderer() {
+    if (root.MolStudioAgentPanel && !isBrowserPanel(panel)) {
+      const renderer = isNativePanel(panel) ? panel : null;
+      panel = createPanel();
+      if (renderer) {
+        renderer.disposed = true;
+        const config = renderer.config;
+        if (config && Object.keys(config).length) panel.setConfig(config);
+        panel.showError(renderer.error ? renderer.error.message : '原生 AI 视图已断开，已恢复网页面板');
+      }
+      updateLayout();
+      return true;
+    }
+    return false;
+  }
+
+  function mount() {
+    if (!root.MolStudioAgentPanel) return;
+    panel = createPanel();
     root.molstudioAgent = {
-      toggle: () => panel.toggle(),
-      open: () => panel.setOpen(true),
+      toggle: () => panel.toggle?.() ?? (() => { if (isNativePanel(panel)) panel.setOpen(!panel.open); })(),
+      open: () => { if (isNativePanel(panel)) panel.setOpen(true); else panel.setOpen(true); },
       ownsFocus,
       stop,
       isRunning: () => pendingStart || !!runtime?.isRunning,
+      pendingStart: () => pendingStart,
       getRuntime: () => runtime,
       getPanel: () => panel,
       send,
+      continue: () => startRequest(activeRuntime => activeRuntime.continue()),
+      reset: () => {
+        requestGeneration++; pendingStart = false;
+        runtime?.reset();
+        panel?.clear?.();
+      },
+      loadSettings: loadConfig,
+      saveSettings: saveConfig,
+      useNativeRenderer,
+      restoreBrowserRenderer,
       handleExternalCommand,
     };
     loadConfig().catch(error => panel.showError(error.message || String(error)));

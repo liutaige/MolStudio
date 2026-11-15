@@ -8,16 +8,90 @@ const { app, BrowserWindow } = NODE_CAFFEINE_AUDIT ? {} : require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const OUT = process.env.MOLSTUDIO_AGENT_TEST_OUT ? path.resolve(process.env.MOLSTUDIO_AGENT_TEST_OUT) : path.resolve(__dirname, '../../.jez/artifacts/agent-integration-validation');
+const PAPER_MODE = process.env.MOLSTUDIO_AGENT_PAPER_MODE === '1';
+const CAPTURE_TRANSACTIONS = process.env.MOLSTUDIO_AGENT_CAPTURE_TRANSACTIONS === '1';
+let flushTransactionArtifacts = async () => {};
 if (!NODE_CAFFEINE_AUDIT) {
   fs.mkdirSync(OUT, { recursive: true });
   app.setPath('userData', path.join(OUT, 'electron-profile'));
 }
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+function inspectPaperLabel(source) {
+  const workbench = typeof source === 'string' ? JSON.parse(source) : source;
+  const texts = (workbench.ket?.root?.nodes || []).filter(node => node.type === 'text').map(node =>
+    (node.paragraphs || []).map(paragraph => (paragraph.parts || []).map(part => part.text || '').join('')).join('\n'));
+  return { nativeTextCount: texts.length, exactText: texts.some(text => text === 'A'.repeat(100)),
+    textLengths: texts.map(text => text.length) };
+}
 const report = { application: 'MolStudio canvas', page: 'fusion/canvas.html',
   build: process.env.MOLSTUDIO_TEST_BUILD || 'current source checkout, isolated Electron test window',
+  paperMode: PAPER_MODE,
   scope: 'Real canvas/app/RDKit with synthetic SSE; optional live model requests use server-side credentials only.', checks: [], real: [], errors: [] };
 const check = (name, pass, detail) => report.checks.push({ name, pass: !!pass, ...(detail === undefined ? {} : { detail }) });
-const watchdog = NODE_CAFFEINE_AUDIT ? null : setTimeout(() => { fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify({ ...report, timedOut: true }, null, 2)); app.exit(2); }, Number(process.env.MOLSTUDIO_AGENT_WATCHDOG_MS) || 240_000);
+const watchdog = NODE_CAFFEINE_AUDIT ? null : setTimeout(async () => { await flushTransactionArtifacts(); fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify({ ...report, timedOut: true }, null, 2)); app.exit(2); }, Number(process.env.MOLSTUDIO_AGENT_WATCHDOG_MS) || 240_000);
+
+// Optional test-only observer. Native serialization and model getters avoid the
+// normal save command, which may finish a user's open text editor. No provider
+// configuration, request headers, tokens, or raw streaming response is read.
+function installTransactionObserver() {
+  const state = window.__agentIntegration, api = k3dAPI.agent, app = MolWorkbench.app;
+  const original = api.applyOperations, records = state.transactions = [];
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const observerState = () => JSON.stringify({ fence: app.agentTask?.captureFence?.(),
+    history: app.adapter.ed.historySize(), dirty: window.__mechDirtyTick || 0,
+    selection: app.adapter.ed.selection(), documentSelection: [...app.documentController.selection],
+    mechanismSelection: [...app.controller.selection], zoom: app.adapter.ed.zoom(),
+    viewBox: app.adapter.canvasSvg()?.getAttribute('viewBox') });
+  const snapshot = record => {
+    try {
+      const before = observerState(), adapter = app.adapter;
+      const native = adapter.doc.defaultView.molstudioNativeActions;
+      const ket = JSON.parse(native.serialize(adapter.struct())), bindings = adapter.mapRuntimeToKet(ket);
+      if (bindings.error) throw new Error(bindings.error);
+      const source = MolWorkbench.storage.serializeWorkbench({ ket,
+        bindings: { atoms: bindings.atoms, bonds: bindings.bonds }, mechanism: app.controller.model.state,
+        ...(app.documentController.active && { document: app.documentController.getState() }),
+        reactionSteps: app.reactionSteps?.export(ket), reactionStepOperations: app.reactionSteps?.exportOperations?.(),
+        agentTask: app.agentTask?.export() });
+      const unchanged = before === observerState();
+      record.observerUnchanged = record.observerUnchanged !== false && unchanged;
+      return { source, history: clone(adapter.ed.historySize()), atoms: adapter.struct().atoms.size,
+        arrows: app.controller.model.state.arrows.length, steps: app.reactionSteps?.export(ket).length || 0 };
+    } catch (error) {
+      (record.captureErrors ||= []).push(String(error.message || error));
+      return { error: String(error.message || error) };
+    }
+  };
+  api.applyOperations = async function (operations, settings) {
+    const record = { sequence: records.length + 1, mode: state.mode, startedAt: new Date().toISOString(),
+      runId: settings?.runId, operationIds: operations?.map?.(op => op?.id),
+      operationTypes: operations?.map?.(op => op?.type), status: 'pending' };
+    records.push(record);
+    try { record.operations = clone(operations); } catch (_) { record.captureErrors = ['Operations cannot be serialized']; }
+    record.before = snapshot(record);
+    try {
+      const result = await original.apply(this, arguments);
+      record.status = 'succeeded';
+      // Successful calls retain small counts. Full before/after sources are
+      // retained only on failure (or an interrupted pending call).
+      delete record.before.source;
+      delete record.operations;
+      record.result = { created: result?.created?.length || 0, updated: result?.updated?.length || 0,
+        deleted: result?.deleted?.length || 0 };
+      return result;
+    } catch (error) {
+      record.status = 'failed';
+      record.error = { name: error?.name, message: String(error?.message || error) };
+      for (const key of ['code', 'phase', 'operationId', 'operationType', 'relatedOperationIds',
+        'layoutFailures', 'diagnostic', 'issues', 'stepId']) {
+        if (error?.[key] !== undefined) { try { record.error[key] = clone(error[key]); } catch (_) {} }
+      }
+      record.after = snapshot(record);
+      throw error;
+    } finally { record.finishedAt = new Date().toISOString(); }
+  };
+  state.transactionObserverBridge = state.rt._bridge() === api;
+}
 
 function inspectAcetal(context, toKetal = false) {
   const atoms = new Map(context.atoms.map(atom => [atom.id, atom]));
@@ -485,7 +559,15 @@ else app.whenReady().then(async () => {
               target:{type:'atom',atomId:oxygen},electronCount:2},
           ],finish:true},'repeat-shift');
           const after = await state.snapshot();
-          state.rejectionPreserved = after.source===before.source && after.undo===before.undo;
+          const beforeSource=JSON.parse(before.source),afterSource=JSON.parse(after.source);
+          state.rejectionDiff={beforeUndo:before.undo,afterUndo:after.undo,
+            changedFields:[...new Set([...Object.keys(beforeSource),...Object.keys(afterSource)])]
+              .filter(key=>JSON.stringify(beforeSource[key])!==JSON.stringify(afterSource[key]))};
+          // Starting this task creates its resumable checkpoint. A rejected
+          // drawing must preserve chemistry, document objects and history;
+          // the task's own bookkeeping is allowed to advance independently.
+          delete beforeSource.agentTask; delete afterSource.agentTask;
+          state.rejectionPreserved = JSON.stringify(afterSource)===JSON.stringify(beforeSource) && after.undo===before.undo;
           return tool('draw_operations',{operations:[
             {id:'donor-pair',type:'lonePair.add',atom:donor},
             {id:'carbonyl-attack',type:'arrow.add',source:{type:'lonePair',id:'donor-pair'},target:{type:'atom',atomId:carbon},electronCount:2},
@@ -519,6 +601,33 @@ else app.whenReady().then(async () => {
       };
       await state.reset('simple');
     })()`);
+    if (CAPTURE_TRANSACTIONS) {
+      await js('(' + installTransactionObserver.toString() + ')()');
+      flushTransactionArtifacts = async () => {
+        try {
+          const records = await js('__agentIntegration?.transactions || []');
+          const dir = path.join(OUT, 'transactions'); fs.mkdirSync(dir, { recursive: true });
+          for (const record of records) {
+            const stem = 'tx-' + String(record.sequence).padStart(4, '0');
+            if (record.status !== 'succeeded') {
+              for (const side of ['before', 'after']) if (record[side]?.source) {
+                const name = stem + '.' + side + '.molwork';
+                fs.writeFileSync(path.join(dir, name), record[side].source);
+                record[side].file = name; delete record[side].source;
+              }
+              fs.writeFileSync(path.join(dir, stem + '.ops.json'), JSON.stringify({ operations: record.operations, runId: record.runId }, null, 2));
+              if (record.error) fs.writeFileSync(path.join(dir, stem + '.error.json'), JSON.stringify(record.error, null, 2));
+            }
+          }
+          fs.writeFileSync(path.join(dir, 'index.json'), JSON.stringify({ build: report.build,
+            application: report.application, page: report.page, capture: 'actual k3dAPI.agent.applyOperations', records }, null, 2));
+          report.transactions = { index: path.join(dir, 'index.json'), calls: records.length,
+            failed: records.filter(record => record.status === 'failed').length,
+            pending: records.filter(record => record.status === 'pending').length,
+            observerUnchanged: records.every(record => record.observerUnchanged === true && !record.captureErrors?.length) };
+        } catch (error) { report.transactionCaptureError = String(error.message || error); }
+      };
+    }
 
     const firstRun = js(`window.__agentIntegration.pending = molstudioAgent.send('画出氢氧根与溴甲烷反应的完整 SN2 机理，包含产物。'); window.__agentIntegration.pending`);
     await until(`!!window.__agentIntegration.releaseTail && !!MolWorkbench.app.adapter.doc.querySelector('[data-agent-preview]')`);
@@ -616,11 +725,12 @@ else app.whenReady().then(async () => {
     await js('__agentIntegration.reset("cross-batch-duplicate").then(()=>__agentIntegration.seedCarbonyl())');
     const continuedCarbonyl = await js("molstudioAgent.send('补全乙醛羰基的电子流，只补氢氧根进攻羰基碳的那一根弯箭头，不画产物。')");
     const duplicateError = await js("__agentIntegration.events.find(e=>e.type==='tool_end'&&e.isError)?.diagnostic");
+    const duplicateState = await js('(async()=>({requests:__agentIntegration.requests,preserved:__agentIntegration.rejectionPreserved,complete:await __agentIntegration.carbonylIsComplete(),diff:__agentIntegration.rejectionDiff}))()');
     check('an existing unlinked arrow rejects a new ID with reversed bond references and preserves the original history',
       continuedCarbonyl.status === 'completed' && duplicateError?.code === 'duplicate_two_electron_target' &&
       duplicateError?.operationId === 'repeat-shift' &&
       await js('__agentIntegration.requests===2&&__agentIntegration.rejectionPreserved&&__agentIntegration.carbonylIsComplete()'),
-      { status: continuedCarbonyl.status, duplicateError });
+      { status: continuedCarbonyl.status, duplicateError, duplicateState });
 
     await js('__agentIntegration.reset("unsupported-hydride")');
     const hydrideResult = await js("molstudioAgent.send('画出连二亚硫酸钠还原这类亚硝基的机理。')");
@@ -648,6 +758,7 @@ else app.whenReady().then(async () => {
         { name: 'plan', limit: 5, text: '先列个简短计划，再画氢氧根与溴甲烷的完整机理（含产物），最后说明完成情况。' },
         { name: 'first-step', limit: 3, text: '只画这个反应的第一步，先不要画后续产物：氢氧根与溴甲烷的取代。' },
         { name: 'single', limit: 2, text: '画一个乙醇分子。' },
+        { name: 'paper-label', limit: 3, text: '请在当前纸页添加一个普通文字说明，内容严格为这100个英文字母，保持一行，不改变已有标题：' + 'A'.repeat(100) },
         { name: 'explain', limit: 2, text: '解释当前选区，不要修改画布。' },
         { name: 'edit-arrow', limit: 4, text: '把已画的这根箭头改为指向带部分正电的那个碳原子。不要新建箭头，也不要增删分子。',
           prep: `(async()=>{const api=k3dAPI.agent;await api.beginRun('edit-arrow-scene');
@@ -668,14 +779,30 @@ else app.whenReady().then(async () => {
         const unknown = requested.filter(name => !known.has(name));
         if (unknown.length) throw new Error('Unknown live case name: ' + unknown.join(','));
       }
+      const resumedSource = process.env.MOLSTUDIO_AGENT_REAL_SEED_FILE
+        ? fs.readFileSync(process.env.MOLSTUDIO_AGENT_REAL_SEED_FILE, 'utf8') : null;
+      if (resumedSource && (!requested || requested.length !== 1)) throw new Error('A saved task requires exactly one live case');
+      if (resumedSource) report.resumedFrom = path.resolve(process.env.MOLSTUDIO_AGENT_REAL_SEED_FILE);
       await js(`__agentIntegration.realLimit=${Math.max(1, Math.min(30, Number(process.env.MOLSTUDIO_AGENT_REAL_LIMIT) || 30))};`);
       for (const task of tasks.filter(task => !requested || requested.includes(task.name))) {
         await js(`__agentIntegration.reset('real')`);
+        if (PAPER_MODE && !resumedSource) await js(`(async()=>{
+          MolStudio.document.init({mode:'paper',size:'A4',orientation:'portrait'});
+          MolStudio.document.addText({x:4,y:4,w:27,h:2,text:'咖啡因相关机理 · 可编辑 A4 纸页',fontSize:14});
+          MolStudio.document.select([]); MolStudio.document.fitPage();
+          await new Promise(resolve=>setTimeout(resolve,200));
+          __agentIntegration.canvasChanges=[];
+        })()`);
         const taskLimit = Math.min(30, Math.max(1, Number(process.env.MOLSTUDIO_AGENT_TASK_LIMIT) || task.limit));
         await js(`__agentIntegration.perTaskLimit=${taskLimit}`);
         if (task.prep) await js('(async()=>{const wait=ms=>new Promise(r=>setTimeout(r,ms));' + task.prep + '})()');
+        if (resumedSource) {
+          const loaded = await js('k3dAPI.loadWorkbench(' + JSON.stringify(resumedSource) + ')');
+          if (!loaded?.ok) throw new Error('Cannot restore saved live task: ' + loaded?.error);
+          await js('(async()=>{await molstudioAgent.getRuntime().restoreTaskCheckpoint();__agentIntegration.canvasChanges=[];})()');
+        }
         const before = await js('__agentIntegration.snapshot()');
-        const result = await js('molstudioAgent.send(' + JSON.stringify(task.text) + ')');
+        const result = await js(resumedSource ? 'molstudioAgent.getRuntime().continue()' : 'molstudioAgent.send(' + JSON.stringify(task.text) + ')');
         const after = await js(`(async()=>{const status=document.querySelector('.mol-agent-status')?.textContent||'';
           return {requests:__agentIntegration.requests,realTotal:__agentIntegration.realTotal,events:__agentIntegration.events,
           canvasChanges:__agentIntegration.canvasChanges,panelComplete:status==='已完成'&&!document.querySelector('.mol-agent-error:not([hidden])'),
@@ -720,6 +847,8 @@ else app.whenReady().then(async () => {
             ? result.status === 'completed' && before.source === after.source && after.events.some(e => e.type === 'text_delta' && e.text?.trim())
             : task.name === 'single'
               ? result.status === 'completed' && after.atoms === 3 && after.molecules === 1 && after.texts === 0
+              : task.name === 'paper-label'
+                ? result.status === 'completed' && after.atoms === 0 && after.texts === 1
               : task.name === 'first-step'
                 ? result.status === 'completed' && after.atoms >= 3 && after.arrows >= 1 && after.texts === 0 && after.endpointsValid
                 : task.name === 'edit-arrow' || task.name === 'edit-delete'
@@ -764,9 +893,31 @@ else app.whenReady().then(async () => {
           methylRoutes.endpointReferencesValid && methylRoutes.routes.every(route => route.connected && route.flowPerStep && route.rightward && route.commonRow) &&
           methylRoutes.routeRows && methylRoutes.resetLeft && caffeineLayoutAudit.pass && caffeineImageExported && after.panelComplete &&
           after.events.some(event => event.type === 'run_end' && event.status === 'completed');
+        let paperAudit;
+        if (PAPER_MODE) {
+          paperAudit = await js(`(async()=>{
+            const context=await k3dAPI.agent.getContext(), state=MolStudio.document.getState();
+            const page=MolWorkbench.documentModel.pageRects(state)[0], r=page.content;
+            const inside=p=>p.x>=r.x-.001&&p.x<=r.x+r.w+.001&&p.y>=r.y-.001&&p.y<=r.y+r.h+.001;
+            const workbench=JSON.parse(await k3dAPI.serializeWorkbench());
+            return {mode:state.mode,pageId:page.id,content:r,version:workbench.version,
+              atomsOnPage:context.atoms.every(inside),
+              arrowsOnPage:context.reactionArrows.every(a=>inside(a.start)&&inside(a.end)),
+              headingRetained:state.objects.some(o=>o.kind==='text'&&o.rich.text.includes('可编辑 A4')),
+              contextHasPage:context.document?.pages?.some(p=>p.id===page.id)};
+          })()`);
+          pass = pass && paperAudit.mode === 'paper' && paperAudit.version === 2 && paperAudit.atomsOnPage &&
+            paperAudit.arrowsOnPage && paperAudit.headingRetained && paperAudit.contextHasPage;
+        }
+        if (task.name === 'paper-label') {
+          const textAudit = inspectPaperLabel(after.source);
+          pass = pass && textAudit.exactText && textAudit.nativeTextCount === 1;
+          fs.writeFileSync(path.join(OUT, 'real-paper-label.molwork'), after.source);
+          fs.writeFileSync(path.join(OUT, 'real-paper-label-text-audit.json'), JSON.stringify(textAudit, null, 2));
+        }
         report.real.push({ name: task.name, pass, status: result.status, requests: after.requests, realTotal: after.realTotal,
           atoms: after.atoms, molecules: after.molecules, lonePairs: after.lonePairs, arrows: after.arrows, texts: after.texts, endpointsValid: after.endpointsValid,
-          ...(acetal && { [task.name]: acetal }), ...(methylRoutes && { routeAudit: methylRoutes }),
+          ...(acetal && { [task.name]: acetal }), ...(methylRoutes && { routeAudit: methylRoutes }), ...(paperAudit && {paperAudit}),
           ...(caffeineLayoutAudit && { layoutAudit: caffeineLayoutAudit, exportAudit: caffeineExportAudit,
             completedWindow: { panelComplete: after.panelComplete, runtimeCompleted: result.status === 'completed',
               actualCurvesReadable: caffeineLayoutAudit.curves.every(curve => curve.pass), accepted: !!pass } }),
@@ -788,6 +939,13 @@ else app.whenReady().then(async () => {
       }
     }
     const browserErrors = await js('__agentIntegration.errors');
+    if (CAPTURE_TRANSACTIONS) {
+      const observed = await js('({bridge:__agentIntegration.transactionObserverBridge,records:__agentIntegration.transactions.map(record=>({mode:record.mode,status:record.status,observerUnchanged:record.observerUnchanged,captureErrors:record.captureErrors,operationIds:record.operationIds}))})');
+      check('transaction observer captures actual runtime bridge calls without changing authored source, selection, view or history',
+        observed.bridge && observed.records.some(record => record.mode === 'simple' && record.status === 'succeeded' && record.operationIds.includes('nuc')) &&
+        observed.records.every(record => record.observerUnchanged === true && !record.captureErrors?.length),
+        { bridge: observed.bridge, calls: observed.records.length, failed: observed.records.filter(record => record.status === 'failed').length });
+    }
     check('no uncaught browser or native engine errors', browserErrors.length === 0 && report.errors.length === 0, { browserErrors, consoleErrors: report.errors });
     report.browserErrors = browserErrors;
     const failures = report.checks.filter(item => !item.pass);
@@ -801,6 +959,7 @@ else app.whenReady().then(async () => {
     try { report.lastEvents = await js('__agentIntegration?.events || []'); } catch {}
     process.exitCode = 1;
   } finally {
+    await flushTransactionArtifacts();
     fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
     clearTimeout(watchdog);win.destroy();app.exit(process.exitCode || 0);
   }

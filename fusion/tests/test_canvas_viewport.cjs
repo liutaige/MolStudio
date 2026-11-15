@@ -77,14 +77,31 @@ test('toolbar points, invalid factors and zoom limits cannot corrupt the viewpor
   assert.equal(f.viewport.zoomBy(0.5), false);
   assert.ok(Object.values(f.render.viewBox).every(Number.isFinite));
 });
-test('Shift-wheel pans horizontally without wheelDelta and ordinary scroll stays native', () => {
+test('plain and Shift-wheel share 0.55 pan gain without wheelDelta', () => {
   const f = fixture(), before = { ...f.render.viewBox };
   const e = f.emit('wheel', { shiftKey: true, deltaY: 100 });
   assert.ok(e.prevented && e.stopped);
-  assert.equal(f.render.viewBox.minX, before.minX + 40);
+  assert.equal(f.render.viewBox.minX, before.minX + 100 * 0.55);
   assert.equal(f.render.viewBox.minY, before.minY);
   assert.ok(Object.values(f.render.viewBox).every(Number.isFinite));
-  assert.equal(f.emit('wheel', { deltaY: 100 }).prevented, undefined);
+  const ordinary = f.emit('wheel', { deltaX: 25, deltaY: 100 });
+  assert.ok(ordinary.prevented && ordinary.stopped);
+  assert.equal(f.render.viewBox.minX, before.minX + 125 * 0.55);
+  assert.equal(f.render.viewBox.minY, before.minY + 100 * 0.55);
+});
+test('pan gain stays constant across zooms and preserves small momentum deltas', () => {
+  for (const zoom of [0.2, 1, 2, 4]) {
+    const f = fixture();
+    f.ed.zoom(zoom);
+    const before = { ...f.render.viewBox };
+    for (const delta of [20, 7.5, 1.25, 0.1, 0.025]) f.emit('wheel', { deltaX: delta, deltaY: -delta });
+    const total = 28.875 * 0.55;
+    assert.ok(Math.abs((f.render.viewBox.minX - before.minX) * zoom - total) < 1e-9);
+    assert.ok(Math.abs((f.render.viewBox.minY - before.minY) * zoom + total) < 1e-9);
+    const after = { ...f.render.viewBox };
+    f.emit('wheel', { deltaX: NaN, deltaY: Infinity });
+    assert.deepEqual(f.render.viewBox, after);
+  }
 });
 test('wheel line/page units are normalised, toolbar scroll is not captured', () => {
   const f = fixture(), g = fixture();
@@ -93,6 +110,10 @@ test('wheel line/page units are normalised, toolbar scroll is not captured', () 
   assert.equal(f.ed.zoom(), g.ed.zoom());
   f.emit('wheel', { shiftKey: true, deltaY: 1, deltaMode: 2 });
   assert.ok(Number.isFinite(f.render.viewBox.minX));
+  const line = fixture(), pixel = fixture();
+  line.emit('wheel', { deltaX: 2, deltaY: 3, deltaMode: 1 });
+  pixel.emit('wheel', { deltaX: 32, deltaY: 48 });
+  assert.deepEqual(line.render.viewBox, pixel.render.viewBox);
   assert.equal(f.emit('wheel', { clientX: 10, clientY: 10, ctrlKey: true }).prevented, undefined);
 });
 test('zoom shortcuts preserve text entry, composition and other modifier combinations', () => {

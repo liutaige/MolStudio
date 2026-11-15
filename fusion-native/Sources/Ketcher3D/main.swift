@@ -1,16 +1,13 @@
 import AppKit
+import Combine
 import Darwin
 import UniformTypeIdentifiers
 import WebKit
+import SwiftUI
+import CryptoKit
 
-/// 本地服务端口。取证构建（-D MOLSTUDIO_SELFTEST）允许用 MOLSTUDIO_SELFTEST_PORT 另开一个端口，
-/// 这样验收脚本可以和用户正在用的 MolStudio 同时跑（正式构建永远是 8462）。
-private let kPort: Int = {
-    #if MOLSTUDIO_SELFTEST
-    if let s = ProcessInfo.processInfo.environment["MOLSTUDIO_SELFTEST_PORT"], let p = Int(s), p > 0 { return p }
-    #endif
-    return 8462
-}()
+/// 本地服务端口：正式包为 8462；隔离候选包或自测构建独立分配/指定端口，避免与用户正在用的 MolStudio 冲突。
+private let kPort: Int = AppRuntimeConfig.shared.port
 
 // MARK: - 运行环境解析（B14 解释器半项）
 // 资源（server.py/网页/vendor/Ketcher）随包或源码树解析，不再写死开发目录；
@@ -58,7 +55,7 @@ private func isExecutableFile(_ path: String) -> Bool {
 /// 返回 (选中的解释器或 nil, 实际尝试过的候选列表——预检失败提示用)。
 private func resolvePython() -> (path: String?, tried: [String]) {
     var tried: [String] = []
-    if let configured = UserDefaults.standard.string(forKey: "MolStudioPythonPath"), !configured.isEmpty {
+    if let configured = AppRuntimeConfig.shared.userDefaults.string(forKey: "MolStudioPythonPath"), !configured.isEmpty {
         tried.append(configured)
         if isExecutableFile(configured) { return (configured, tried) }
     }
@@ -167,6 +164,7 @@ final class CanvasSession {
 enum PendingPayload {
     case none                                   // 无待注入：为尚未初始化的会话建立干净基线
     case newDocument                            // 新建：空画布 + 干净基线 + 清文件身份
+    case newPaperDocument(setup: WelcomePaperSetup) // 纸页完成初始化后才提交新会话
     case openCanvasFile(text: String, url: URL) // 打开已有结构文件：载入成功才提交会话身份
     case restoreSession(text: String)           // 恢复内存会话（往返切换）；R02：文本在进入 pending 事务时固定拷贝，注入时不再回读可能被污染的 currentSnapshot
 }
@@ -175,10 +173,20 @@ enum PendingPayload {
 // MARK: - App
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
                          WKScriptMessageHandler, NSWindowDelegate,
-                         NSTableViewDataSource, NSTableViewDelegate {
+                         NSTableViewDataSource, NSTableViewDelegate,
+                         NSMenuItemValidation {
 
     var window: NSWindow!
     var web: GestureWebView!
+    private var workspaceBridge: WorkspaceWKWebViewBridge?
+    // Internal (not private): native panel extension in WorkspaceNativePanels.swift
+    // dispatches through the same coordinator / split controller.
+    var workspaceCoordinator: WorkspaceStateCoordinator?
+    var workspaceSplitVC: WorkspaceSplitViewController?
+    private var workspaceAttachFallbackGeneration: Int?
+    private var welcomeRecentsCancellable: AnyCancellable?
+    private var acceptanceTelemetryServer: AcceptanceTelemetryServer?
+    private var appUserDefaults: UserDefaults { AppRuntimeConfig.shared.userDefaults }
     var server: Process?
     var serverPython: String?   // 预检通过的 Python 解释器路径（服务启动失败提示用，B14）
     // R06：服务进程 stderr 尾部缓存（appendServerStderr 限长防刷屏），启动失败诊断用
@@ -193,7 +201,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     // 文件管理
     var docsDir: URL!
     var welcomeWin: NSWindow?
+    private var welcomeModel: WelcomeViewModel?
     var helpWin: NSWindow?
+    var periodicTableWin: NSWindow?
     var fileTable: NSTableView?
     var fileList: [URL] = []
     var dirtyTimer: Timer?
@@ -202,6 +212,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     // 画布会话；currentFile/isDirty 只通过本会话读写文件身份与修改状态
     var activeMode: SessionMode = .canvas
     var canvasSession = CanvasSession()
+    private var documentPDFExporter: DocumentPDFExporter?
+    private var documentPDFExportInFlight = false
+    private var thumbnailGeneration = 0
     var navigationGeneration = 1     // 每次 web.load 递增；旧导航的回调凭序号作废
     var openRequestGeneration = 0    // 打开意图：后发打开/取消/新建/关闭/退出撤销旧请求
     private var pendingPayload: PendingPayload = .none
@@ -249,24 +262,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
 
     // MARK: 生命周期
     func applicationDidFinishLaunching(_ note: Notification) {
+        AppRuntimeConfig.shared.prepareDirectories()
         startServer()
+        setupDocuments()
         buildMenu()
         makeWindow()
+        // The opaque native cover goes up before the window is ever shown, so
+        // no stale WebView frame or retired web toolbar can appear on launch.
+        workspaceSplitVC?.canvasHostViewController.setNavigationCoverVisible(true)
         #if MOLSTUDIO_SELFTEST
         scheduleSelfTest()          // 仅 -D MOLSTUDIO_SELFTEST 的取证构建
         #endif
         window.orderOut(nil)
         installMagnifyMonitor()
-        setupDocuments()
         // 欢迎页是常驻启动页：每次启动都显示（启动器式生命周期），
         // 上次打开的文件在列表里预选，双击即可继续。不再自动跳过欢迎页。
         showWelcome()
         startDirtyTracking()
+        startAcceptanceObserverIfRequested()
         // B14：预检失败时服务没有启动（startServer 内已弹可读错误），不再空等端口约 30 秒后报第二个错
         if server != nil { waitForServer(attempts: 80) }
     }
 
-    func applicationWillTerminate(_ note: Notification) { server?.terminate() }
+    func applicationWillTerminate(_ note: Notification) {
+        acceptanceTelemetryServer?.stop()
+        workspaceCoordinator?.detachCurrentEpoch()
+        server?.terminate()
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     /// 应用退出检查：现读画布快照，确认未保存内容，
@@ -416,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             let required = ["server.py", "stereo.py", "agent_gateway.py", "agent_external_bridge.py", "mcp_server.py", "mcp_response.py",
                             "canvas.html", "help.html", "threed.html",
                             "vendor/ngl.js", "workbench", "ketcher-local", "examples",
-                            "agent/app.js", "agent/panel.js", "agent/panel.css", "agent/dist/agent-runtime.js"]
+                            "agent/app.js", "agent/panel.js", "agent/panel.css", "agent/native-renderer.js", "agent/dist/agent-runtime.js"]
             let missing = required.filter {
                 !fm.fileExists(atPath: kServerDir.appendingPathComponent($0).path)
             }
@@ -470,16 +492,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         guard let python = precheckRuntime() else { return }
         serverPython = python
 
-        // 上次崩溃/强退会遗留孤儿 server.py 占着端口：先清掉，避免用到旧进程旧代码
-        let cleanup = Process()
-        cleanup.executableURL = URL(fileURLWithPath: "/bin/bash")
-        cleanup.arguments = ["-c",
-            "for pid in $(lsof -ti tcp:\(kPort) 2>/dev/null); do "
-          + "ps -p $pid -o args= 2>/dev/null | grep -q 'server.py' && kill $pid; done; sleep 0.3"]
-        do { try cleanup.run(); cleanup.waitUntilExit() } catch { dbg("server cleanup failed: \(error)") }
+        // 上次崩溃/强退会遗留孤儿 server.py 占着端口：先清掉，避免用到旧进程旧代码。
+        // 隔离候选构建额外防御：绝不清理正式/演示保留端口（8462 / 48975 / 49180）。
+        if !AppRuntimeConfig.shared.isIsolated || ![8462, 48975, 49180].contains(kPort) {
+            let cleanup = Process()
+            cleanup.executableURL = URL(fileURLWithPath: "/bin/bash")
+            cleanup.arguments = ["-c",
+                "for pid in $(lsof -ti tcp:\(kPort) 2>/dev/null); do "
+              + "ps -p $pid -o args= 2>/dev/null | grep -q 'server.py' && kill $pid; done; sleep 0.3"]
+            do { try cleanup.run(); cleanup.waitUntilExit() } catch { dbg("server cleanup failed: \(error)") }
+        }
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: python)
+        if let agentConfigDir = AppRuntimeConfig.shared.agentConfigDirectoryURL {
+            var env = ProcessInfo.processInfo.environment
+            env["MOLSTUDIO_AGENT_CONFIG_DIR"] = agentConfigDir.path
+            p.environment = env
+        }
         let bundledPython = kServerDir.appendingPathComponent("python/bin/python").standardizedFileURL.path
         // 包内运行时隔离用户 Python 环境；所有打包态解释器都禁止写入 pyc，
         // 避免外置解释器导入包内 stereo.py 时也污染应用包和破坏签名。
@@ -569,7 +599,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             let ok = (resp as? HTTPURLResponse)?.statusCode == 200
             DispatchQueue.main.async {
                 if ok {
-                    self.web.load(URLRequest(url: self.base.appendingPathComponent("canvas.html")))
+                    // No startup canvas preload. The main window stays hidden
+                    // behind its first-frame loading cover until an explicit
+                    // navigation registers a new generation and loads
+                    // canvas.html?nativeCanvas=1. Preloading here was the source
+                    // of the "old frame / old attach state" flash on 新建画布.
+                    self.dbg("service ready; waiting for explicit navigation")
                 } else {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         self.waitForServer(attempts: attempts - 1)
@@ -586,9 +621,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
                           backing: .buffered, defer: false)
         window.title = "MolStudio"
         window.subtitle = "就绪"
-        window.appearance = NSAppearance(named: .aqua)
+        window.minSize = NSSize(width: 960, height: 640)
+        // Follow system Light/Dark appearance so native chrome and macOS 26+ Glass adapt cleanly.
         window.center()
-        window.setFrameAutosaveName("K3DMain")
+        let frameName = AppRuntimeConfig.shared.isIsolated
+            ? "K3DMain-\(AppRuntimeConfig.shared.isolationProfile ?? "isolated")"
+            : "K3DMain"
+        window.setFrameAutosaveName(frameName)
 
         let cfg = WKWebViewConfiguration()
         cfg.userContentController.add(self, name: "k3d")
@@ -598,11 +637,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             window.molstudioClipboard = window.molstudioClipboard || {};
             window.molstudioClipboard.preferEvents = true;
             """, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        // First-frame canvas mode: inject the Ketcher toolbar-hiding stylesheet
+        // into the iframe at document start (before its React bundle renders).
+        // It is scoped to the Ketcher document only; the top-level canvas.html
+        // hides its own legacy UI with a parse-time stylesheet. Engine button
+        // definitions are deliberately left intact: hiding them through
+        // hiddenControls breaks Ketcher's default selected tool and its editor
+        // instance. This is a real first-frame hide, not a post-attach CSS fix.
+        cfg.userContentController.addUserScript(WKUserScript(source: Self.ketcherCanvasModeCSS,
+            injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        cfg.userContentController.addUserScript(WKUserScript(source: Self.canvasDarkModeCSS,
+            injectionTime: .atDocumentStart, forMainFrameOnly: false))
         let gw = GestureWebView(frame: .zero, configuration: cfg)
+        gw.setValue(false, forKey: "drawsBackground")
+        gw.underPageBackgroundColor = .clear
         gw.navigationDelegate = self
-        gw.autoresizingMask = [.width, .height]
-        window.contentView = gw
+        gw.translatesAutoresizingMaskIntoConstraints = false
         web = gw
+
+        let bridge = WorkspaceWKWebViewBridge(webView: gw, expectedOrigin: "http://127.0.0.1:\(kPort)")
+        let callbacks = WorkspaceFileServiceCallbacks(
+            onNewCanvas: { [weak self] in self?.actNewDocument() },
+            onNewPaper: { [weak self] in self?.actNewPaperDocument() },
+            onOpenPanel: { [weak self] in self?.actOpen() },
+            onOpenURL: { [weak self] url in self?.openDocument(at: url) },
+            onSave: { [weak self] in self?.actSave() },
+            onSaveAs: { [weak self] in self?.actSaveAs() },
+            onShowWelcome: { [weak self] in self?.actShowWelcome() },
+            onRevealInFinder: { url in NSWorkspace.shared.activateFileViewerSelecting([url]) },
+            onRenameURL: { [weak self] url in self?.renameRecentFile(at: url) },
+            onRemoveRecent: { [weak self] item in self?.removeRecentItem(item) },
+            onCleanLayout: { [weak self] in self?.actClean() },
+            onGenerate3D: { [weak self] in self?.actGen3D() },
+            onCheckStructure: { [weak self] in self?.actCheck() },
+            onComputeProperties: { [weak self] in self?.actProps() },
+            onExportMol: { [weak self] in self?.actExportMol() },
+            onExportMechanismImage: { [weak self] in self?.actExportMechanismImage() },
+            onExportDocumentPDF: { [weak self] in self?.actExportDocumentPDF() },
+            onCopySmiles: { [weak self] in self?.actCopySmiles() },
+            onCanvasClipboardAction: { [weak self] action, sender in
+                self?.performCanvasClipboard(action, sender: sender) ?? false
+            },
+            canPerformCanvasClipboardAction: { [weak self] _ in
+                guard let self else { return false }
+                return self.pageUsable && !self.navigationInFlight && self.web != nil
+            },
+            onLegacyCanvasEditAction: { [weak self] action, sender in
+                self?.performLegacyCanvasEdit(action, sender: sender) ?? false
+            },
+            canPerformLegacyCanvasEditAction: { [weak self] _ in
+                guard let self else { return false }
+                return self.pageUsable && !self.navigationInFlight && self.web != nil
+            },
+            onSwitchToCanvasMode: { [weak self] in self?.actSwitchToCanvasMode() },
+            onSwitchToPaperMode: { [weak self] in self?.actSwitchToPaperMode() },
+            onPaperSetup: { [weak self] in self?.actPaperSetup() },
+            onAddPaperPage: { [weak self] in self?.actAddPaperPage() },
+            onRemoveBlankLastPage: { [weak self] in self?.actRemoveBlankLastPage() },
+            onInsertImageIntoDocument: { [weak self] in self?.actInsertImageIntoDocument() },
+            onInsertFileIntoDocument: { [weak self] in self?.actInsertFileIntoDocument() }
+        )
+        let coordinator = WorkspaceStateCoordinator(bridge: bridge, fileCallbacks: callbacks)
+        coordinator.beginNavigation(generation: navigationGeneration)
+        let splitVC = WorkspaceSplitViewController(
+            coordinator: coordinator,
+            initialRecentItems: welcomeModel?.recentItems ?? [],
+            canvasContentView: gw,
+            backdropTone: .cleanWhite
+        )
+        workspaceBridge = bridge
+        workspaceCoordinator = coordinator
+        workspaceSplitVC = splitVC
+        splitVC.canvasHostViewController.onRetryNavigation = { [weak self] in self?.reloadCurrentPage() }
+        splitVC.canvasHostViewController.onReturnToWelcome = { [weak self] in self?.showWelcome() }
+        splitVC.canvasHostViewController.onSaveInMemorySnapshot = { [weak self] in self?.actSaveAs() }
+        splitVC.canvasHostViewController.onInsertImageRequested = { [weak self] in self?.actInsertImageIntoDocument() }
+        splitVC.canvasHostViewController.onPeriodicTableRequested = { [weak self] anchor in
+            self?.presentPeriodicTable(from: anchor)
+        }
+        splitVC.canvasHostViewController.onMoreTemplatesRequested = { [weak self] anchor in
+            self?.presentMoreTemplates(from: anchor)
+        }
+        splitVC.canvasHostViewController.onPropertiesRequested = { [weak self] anchor in
+            self?.presentNativeProperties(from: anchor)
+        }
+        splitVC.toolbarController.onShowAdvancedToolsMenu = { [weak self] anchor in
+            self?.presentAdvancedToolsMenu(from: anchor)
+        }
+
+        window.contentViewController = splitVC
+        splitVC.installWindowChrome(on: window)
 
         window.delegate = self          // B01：主窗口关闭确认（windowShouldClose）必需
         installClipboardShortcuts()
@@ -612,11 +736,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             window.setFrameOrigin(NSPoint(x: -6000, y: -6000))
         }
         #endif
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         #if MOLSTUDIO_SELFTEST
         // 取证构建：窗口立刻最小化，不盖住用户正在用的 MolStudio
         if ProcessInfo.processInfo.environment["MOLSTUDIO_SELFTEST"] != nil {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
             window.miniaturize(nil)
         }
         #endif
@@ -632,26 +756,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             guard let self else { return ev }
             // 只管主画布窗口；对话框、3D 窗口里的输入框照旧走系统
             guard let key = NSApp.keyWindow, key === self.window else { return ev }
-            // 原生 field editor / 搜索框拥有自己的编辑语义，不能被画布命令截走。
-            if self.hasNativeEditableFirstResponder(in: key) { return ev }
             let mods = ev.modifierFlags.intersection(.deviceIndependentFlagsMask)
             guard mods.contains(.control), !mods.contains(.command), !mods.contains(.option), !mods.contains(.shift) else { return ev }
             guard !ev.isARepeat, let ch = ev.charactersIgnoringModifiers?.lowercased() else { return ev }
-            switch ch {
-            case "c": self.actCopy(); return nil
-            case "x": self.actCut(); return nil
-            case "v": self.actPaste(); return nil
-            default: return ev
-            }
+            return self.handleControlClipboardKeyEvent(ev, character: ch, in: key)
         }
     }
 
-    private func hasNativeEditableFirstResponder(in window: NSWindow) -> Bool {
-        guard let responder = window.firstResponder else { return false }
-        if responder is NSTextView { return true } // includes AppKit field editors
-        if let field = responder as? NSTextField, field.isEditable { return true }
-        if let combo = responder as? NSComboBox, combo.isEditable { return true }
-        return false
+    func handleControlClipboardKeyEvent(_ event: NSEvent, character: String, in keyWindow: NSWindow) -> NSEvent? {
+        guard keyWindow === window else { return event }
+        let owner = WorkspaceFocusRouter.classifyFocusOwner(in: keyWindow, canvasView: web)
+        // 原生文本框/只读可选中回复及原生控件保留自己的键盘语义，不吞事件
+        guard owner == .canvas || owner == .none else { return event }
+        let handled: Bool
+        switch character {
+        case "c": handled = performCopy()
+        case "x": handled = performCut()
+        case "v": handled = performPaste()
+        default: return event
+        }
+        return handled ? nil : event
     }
 
     // MARK: 菜单
@@ -670,7 +794,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         main.addItem(submenu("文件", [
             // 欢迎页用 ⇧⌘H（H=Home）。⇧⌘W 与系统"关闭窗口 ⌘W / 关闭全部 ⌥⌘W"的联想冲突。
             ("欢迎页…", #selector(actShowWelcome), "h", [.command, .shift]),
-            ("新建", #selector(actNewDocument), "n", [.command]),
+            ("新建画布", #selector(actNewDocument), "n", [.command]),
+            ("新建纸页", #selector(actNewPaperDocument), "n", [.command, .shift]),
             ("打开…", #selector(actOpen), "o", [.command]),
             ("-", nil, "", []),
             ("保存", #selector(actSave), "s", [.command]),
@@ -681,6 +806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             ("-", nil, "", []),
             ("导出 MOL…", #selector(actExportMol), "", []),
             ("导出机理图…", #selector(actExportMechanismImage), "", []),
+            ("导出文档 PDF…", #selector(actExportDocumentPDF), "", []),
             ("复制 SMILES", #selector(actCopySmiles), "", []),
         ]))
 
@@ -697,8 +823,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         ]))
 
         main.addItem(submenu("视图", [
+            ("显示/隐藏文库边栏", #selector(actToggleSidebar), "s", [.command, .control]),
+            ("显示/隐藏检查器", #selector(actToggleInspector), "i", [.command]),
+            ("AI 化学助手", #selector(actToggleAgent), "j", [.command]),
+            ("-", nil, "", []),
             ("放大", #selector(actZoomIn), "=", [.command]),
             ("缩小", #selector(actZoomOut), "-", [.command]),
+            ("实际大小 (100%)", #selector(actZoomReset), "0", [.command]),
+            ("适应视图", #selector(actZoomFit), "9", [.command]),
             ("-", nil, "", []),
             ("分析窗口", #selector(actProps), "a", [.command, .shift]),
             ("3D 预览窗口", #selector(actToggle3D), "3", [.command, .shift]),
@@ -710,6 +842,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             ("-", nil, "", []),
             ("计算性质…", #selector(actProps), "p", [.command, .shift]),
             ("生成 3D 预览", #selector(actGen3D), "d", [.command, .shift]),
+        ]))
+
+        main.addItem(submenu("纸页", [
+            ("切换为纸页文档", #selector(actSwitchToPaperMode), "", []),
+            ("切换为无边画布", #selector(actSwitchToCanvasMode), "", []),
+            ("-", nil, "", []),
+            ("页面设置…", #selector(actPaperSetup), "", []),
+            ("新增页面", #selector(actAddPaperPage), "", []),
+            ("删除空白末页", #selector(actRemoveBlankLastPage), "", []),
+            ("-", nil, "", []),
+            ("插入图片到纸页…", #selector(actInsertImageIntoDocument), "", []),
+            ("插入 .molwork / .ket 到纸页…", #selector(actInsertFileIntoDocument), "", []),
         ]))
 
         let winItem = NSMenuItem()
@@ -838,26 +982,179 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     // MARK: 文件 / 编辑
     // 注：原 actNew / actClear（无确认直接清空画布并把结果刷成已保存基线）已删除：
     // 菜单与网页桥都不再引用它们，留着就是一条潜在的静默丢数据路径。
-    @objc func actUndo() { js("window.k3dAPI.undo()") }
-    @objc func actRedo() { js("window.k3dAPI.redo()") }
-    @objc func actSelectAll() {
-        let send = { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) }
-        let sourceWindow = NSApp.keyWindow
-        if sourceWindow !== window ||
-            (sourceWindow.map { hasNativeEditableFirstResponder(in: $0) } ?? false) {
-            _ = send()
-            return
-        }
-        let gen = navigationGeneration
-        jsValue("return !!(window.k3dAPI && window.k3dAPI.selectAll && window.k3dAPI.selectAll())") { value, ok in
-            guard gen == self.navigationGeneration, NSApp.keyWindow === sourceWindow else { return }
-            // 页面里的真实文本框不扩选画布，交回 WebKit 的原生文本全选。
-            if !ok || (value as? Bool) != true { _ = send() }
+    private var targetEditWindow: NSWindow? { NSApp.keyWindow ?? window }
+
+    private func validateMenuEditAction(_ selector: Selector, editWindow: NSWindow?, canUseCanvas: Bool) -> Bool {
+        let isMainCanvasWindow = (editWindow === window)
+        let canFallbackCanvas = isMainCanvasWindow && canUseCanvas && web != nil
+        return WorkspaceFocusRouter.validateEditAction(
+            selector,
+            in: editWindow,
+            canvasView: isMainCanvasWindow ? web : nil,
+            coordinator: isMainCanvasWindow ? workspaceCoordinator : nil,
+            legacyClipboardValidator: canFallbackCanvas ? { _ in true } : { _ in false },
+            legacyEditValidator: canFallbackCanvas ? { _ in true } : { _ in false }
+        )
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard let action = menuItem.action else { return true }
+        let editWindow = targetEditWindow
+        let canUseCanvas = pageUsable && !navigationInFlight
+        let isPaper = (workspaceCoordinator?.uiState.viewport.mode == .paper) || snapshotHasDocument(session.currentSnapshot)
+
+        switch action {
+        case #selector(actUndo):
+            return validateMenuEditAction(#selector(WorkspaceSplitViewController.undo(_:)), editWindow: editWindow, canUseCanvas: canUseCanvas)
+        case #selector(actRedo):
+            return validateMenuEditAction(#selector(WorkspaceSplitViewController.redo(_:)), editWindow: editWindow, canUseCanvas: canUseCanvas)
+        case #selector(actCut):
+            return validateMenuEditAction(#selector(NSText.cut(_:)), editWindow: editWindow, canUseCanvas: canUseCanvas)
+        case #selector(actCopy):
+            return validateMenuEditAction(#selector(NSText.copy(_:)), editWindow: editWindow, canUseCanvas: canUseCanvas)
+        case #selector(actPaste):
+            return validateMenuEditAction(#selector(NSText.paste(_:)), editWindow: editWindow, canUseCanvas: canUseCanvas)
+        case #selector(actSelectAll):
+            return validateMenuEditAction(#selector(NSText.selectAll(_:)), editWindow: editWindow, canUseCanvas: canUseCanvas)
+        case #selector(actDeleteSel):
+            return validateMenuEditAction(#selector(NSText.delete(_:)), editWindow: editWindow, canUseCanvas: canUseCanvas)
+        case #selector(actToggleSidebar), #selector(actToggleInspector), #selector(actToggleAgent):
+            return workspaceSplitVC != nil
+        case #selector(actZoomIn), #selector(actZoomOut):
+            if let coord = workspaceCoordinator, coord.isCanvasSurfaceReady(.zoomPalette) {
+                return canUseCanvas && coord.isCommandSupported("zoom.by")
+            }
+            return canUseCanvas
+        case #selector(actZoomReset):
+            if let coord = workspaceCoordinator, coord.isCanvasSurfaceReady(.zoomPalette) {
+                return canUseCanvas && coord.isCommandSupported("zoom.toPercent")
+            }
+            return canUseCanvas
+        case #selector(actZoomFit):
+            return canUseCanvas && (workspaceCoordinator?.isCanvasSurfaceReady(.zoomPalette) == true) && (workspaceCoordinator?.isCommandSupported("zoom.fit") == true)
+        case #selector(actSave), #selector(actSaveAs), #selector(actExportMol), #selector(actExportMechanismImage),
+             #selector(actExportDocumentPDF), #selector(actCopySmiles), #selector(actCheck), #selector(actClean),
+             #selector(actProps), #selector(actGen3D):
+            return canUseCanvas
+        case #selector(actSwitchToPaperMode):
+            return canUseCanvas && !isPaper
+        case #selector(actSwitchToCanvasMode), #selector(actPaperSetup), #selector(actAddPaperPage),
+             #selector(actInsertImageIntoDocument), #selector(actInsertFileIntoDocument):
+            return canUseCanvas && isPaper
+        case #selector(actRemoveBlankLastPage):
+            let canRemove = workspaceCoordinator?.uiState.document?.canRemoveLastPage ?? true
+            return canUseCanvas && isPaper && canRemove
+        default:
+            return true
         }
     }
-    @objc func actDeleteSel() { js("window.k3dAPI.deleteSel()") }
-    @objc func actZoomIn() { js("window.k3dAPI.zoomBy(1.25)") }
-    @objc func actZoomOut() { js("window.k3dAPI.zoomBy(0.8)") }
+
+    @objc func actToggleSidebar() { workspaceSplitVC?.toggleLibrarySidebar(nil) }
+    @objc func actToggleInspector() { workspaceSplitVC?.toggleInspectorPanel(nil) }
+    @objc func actToggleAgent() { workspaceSplitVC?.toggleAgentInspectorTab(nil) }
+
+    @discardableResult
+    private func routeEditAction(_ selector: Selector, sender: Any? = nil) -> Bool {
+        let editWindow = targetEditWindow
+        let isMainCanvasWindow = (editWindow === window)
+        let canFallbackCanvas = isMainCanvasWindow && pageUsable && !navigationInFlight && web != nil
+        return WorkspaceFocusRouter.performEditAction(
+            selector,
+            sender: sender,
+            in: editWindow,
+            canvasView: isMainCanvasWindow ? web : nil,
+            coordinator: isMainCanvasWindow ? workspaceCoordinator : nil,
+            legacyClipboardHandler: canFallbackCanvas ? { [weak self] action, src in
+                self?.performCanvasClipboard(action, sender: src) ?? false
+            } : nil,
+            legacyClipboardValidator: canFallbackCanvas ? { _ in true } : { _ in false },
+            legacyEditHandler: canFallbackCanvas ? { [weak self] action, src in
+                self?.performLegacyCanvasEdit(action, sender: src) ?? false
+            } : nil,
+            legacyEditValidator: canFallbackCanvas ? { _ in true } : { _ in false }
+        )
+    }
+
+    @discardableResult
+    private func performLegacyCanvasEdit(_ action: WorkspaceLegacyCanvasEditAction, sender: Any? = nil) -> Bool {
+        guard pageUsable, !navigationInFlight, web != nil else { return false }
+        switch action {
+        case .undo:
+            js("window.k3dAPI && window.k3dAPI.undo && window.k3dAPI.undo()")
+            return true
+        case .redo:
+            js("window.k3dAPI && window.k3dAPI.redo && window.k3dAPI.redo()")
+            return true
+        case .delete:
+            js("window.k3dAPI && window.k3dAPI.deleteSel && window.k3dAPI.deleteSel()")
+            return true
+        case .selectAll:
+            let editWindow = targetEditWindow
+            let gen = navigationGeneration
+            jsValue("return !!(window.k3dAPI && window.k3dAPI.selectAll && window.k3dAPI.selectAll())") { value, ok in
+                guard gen == self.navigationGeneration else { return }
+                if let activeKey = NSApp.keyWindow, activeKey !== editWindow { return }
+                if !ok || (value as? Bool) != true {
+                    let target: Any? = (NSApp.keyWindow === editWindow) ? nil : self.web
+                    _ = NSApp.sendAction(#selector(NSText.selectAll(_:)), to: target, from: sender)
+                }
+            }
+            return true
+        }
+    }
+
+    @objc func actUndo() {
+        _ = routeEditAction(#selector(WorkspaceSplitViewController.undo(_:)))
+    }
+
+    @objc func actRedo() {
+        _ = routeEditAction(#selector(WorkspaceSplitViewController.redo(_:)))
+    }
+
+    @objc func actSelectAll() {
+        if routeEditAction(#selector(NSText.selectAll(_:))) {
+            return
+        }
+        if targetEditWindow !== window {
+            _ = NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+        }
+    }
+
+    @objc func actDeleteSel() {
+        _ = routeEditAction(#selector(NSText.delete(_:)))
+    }
+
+    @objc func actZoomIn() {
+        if let coord = workspaceCoordinator, coord.isCanvasSurfaceReady(.zoomPalette), coord.isCommandSupported("zoom.by") {
+            let size = web?.bounds.size ?? .zero
+            coord.zoomBy(factor: 1.25, anchorCSSPoint: CGPoint(x: size.width * 0.5, y: size.height * 0.5))
+        } else {
+            js("window.k3dAPI.zoomBy(1.25)")
+        }
+    }
+
+    @objc func actZoomOut() {
+        if let coord = workspaceCoordinator, coord.isCanvasSurfaceReady(.zoomPalette), coord.isCommandSupported("zoom.by") {
+            let size = web?.bounds.size ?? .zero
+            coord.zoomBy(factor: 0.8, anchorCSSPoint: CGPoint(x: size.width * 0.5, y: size.height * 0.5))
+        } else {
+            js("window.k3dAPI.zoomBy(0.8)")
+        }
+    }
+
+    @objc func actZoomReset() {
+        if let coord = workspaceCoordinator, coord.isCanvasSurfaceReady(.zoomPalette), coord.isCommandSupported("zoom.toPercent") {
+            coord.zoomToPercent(100)
+        } else {
+            js("window.k3dAPI.zoomToPercent ? window.k3dAPI.zoomToPercent(100) : null")
+        }
+    }
+
+    @objc func actZoomFit() {
+        guard let coord = workspaceCoordinator, coord.isCanvasSurfaceReady(.zoomPalette), coord.isCommandSupported("zoom.fit") else { return }
+        let target = coord.uiState.viewport.mode == .paper ? "page" : "content"
+        coord.zoomFit(target: target)
+    }
 
     // MARK: 剪贴板（编辑菜单 ⌘X/⌘C/⌘V）
     // 菜单和快捷键都发送标准 copy:/cut:/paste:，由 WebKit 派发真实 DOM 事件。
@@ -865,8 +1162,127 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
 
     /// 机理载荷只写自定义类型、不写纯文本：粘进文本框不会蹦出一串 JSON，
     /// 而「剪贴板被别的内容覆盖」时这个类型自然消失，粘贴就自动回到原生路径。
+    /// Injected at document start into the Ketcher iframe so the retired web
+    /// toolbars are never painted, even for a single frame. `!important` and
+    /// an all-frame WKUserScript mean a late detach/attach callback cannot
+    /// restore them. Scoped by Ketcher's own root id to avoid touching other
+    /// pages (help.html / threed.html) served by the same WKWebView.
+    static let ketcherCanvasModeCSS = """
+    (function () {
+      if (location.pathname.indexOf('/ketcher/') !== 0) return;
+      if (document.getElementById('molstudio-ketcher-canvas-mode')) return;
+      var style = document.createElement('style');
+      style.id = 'molstudio-ketcher-canvas-mode';
+      style.textContent = [
+        '[data-testid="top-toolbar"],',
+        '[data-testid="left-toolbar"],',
+        '[data-testid="right-toolbar"],',
+        '[data-testid="bottom-toolbar"],',
+        '[data-testid="left-toolbar-buttons"],',
+        '[data-mech-tool],',
+        '[data-mech-actions],',
+        '[data-mech-action],',
+        '.MuiAppBar-root',
+        '{ display: none !important; visibility: hidden !important; pointer-events: none !important; }',
+        'html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; }'
+      ].join('\\n');
+      (document.head || document.documentElement).appendChild(style);
+    })();
+    """
+
+    /// Adaptive Dark Mode canvas stylesheet injected at document start for nativeCanvas=1 & /ketcher/.
+    /// Infinite Canvas uses a deep charcoal background with hue-preserving light chemical strokes;
+    /// Paper Mode keeps crisp white paper sheets on a dark desk. Exports clone clean SVGs separately.
+    static let canvasDarkModeCSS = """
+    (function () {
+      var isKetcher = location.pathname.indexOf('/ketcher/') === 0;
+      var isNativeCanvas = location.search.indexOf('nativeCanvas=1') !== -1;
+      if (!isKetcher && !isNativeCanvas) return;
+      if (document.getElementById('molstudio-canvas-dark-mode')) return;
+      var style = document.createElement('style');
+      style.id = 'molstudio-canvas-dark-mode';
+      if (isKetcher) {
+        style.textContent = [
+          '@media (prefers-color-scheme: dark) {',
+          '  html, body, #root, main,',
+          '  .Ketcher-root, .Ketcher-polymer-editor-root,',
+          '  [class*="Editor-module_editorsWrapper"],',
+          '  [class*="Editor-module_editor"],',
+          '  [class*="App-module_app"],',
+          '  [class*="App-module_left"],',
+          '  [class*="App-module_right"],',
+          '  [class*="App-module_canvas"],',
+          '  [class*="StructEditor-module_canvas"],',
+          '  [class*="StructEditor-module_intermediateCanvas"] {',
+          '    background-color: #1a1a1a !important;',
+          '    --color-background-primary: #1a1a1a;',
+          '    --color-background-canvas: #1a1a1a;',
+          '    color-scheme: dark;',
+          '  }',
+          '  [class*="StructEditor-module_canvas"] ::-webkit-scrollbar,',
+          '  [class*="StructEditor-module_intermediateCanvas"] ::-webkit-scrollbar {',
+          '    background-color: #202227 !important;',
+          '  }',
+          '  [class*="StructEditor-module_canvas"] ::-webkit-scrollbar-thumb,',
+          '  [class*="StructEditor-module_intermediateCanvas"] ::-webkit-scrollbar-thumb {',
+          '    background-color: rgba(136, 146, 160, 0.52) !important;',
+          '  }',
+          '  [class*="StructEditor-module_measureLog"] {',
+          '    background-color: #25272d !important;',
+          '    border-color: #3a3f4b !important;',
+          '    color: #e6e9ef !important;',
+          '  }',
+          '  [class*="StructEditor-module_spinnerOverlay"] {',
+          '    background-color: rgba(26, 26, 26, 0.72) !important;',
+          '  }',
+          '  [class*="StructEditor-module_canvas"] svg:not(g svg):not(:has([data-page-id])) {',
+          '    background-color: #ffffff !important;',
+          '    filter: invert(0.898) hue-rotate(180deg);',
+          '  }',
+          '  [class*="StructEditor-module_canvas"] svg:not(g svg):not(:has([data-page-id])) [data-doc-kind="image"] image {',
+          '    filter: invert(1) hue-rotate(180deg);',
+          '  }',
+          '  body:not(:has([data-page-id])) #molstudio-document-editor {',
+          '    filter: invert(0.898) hue-rotate(180deg);',
+          '  }',
+          '  body:has([data-page-id]),',
+          '  body:has([data-page-id]) #root,',
+          '  body:has([data-page-id]) main,',
+          '  body:has([data-page-id]) .Ketcher-root,',
+          '  body:has([data-page-id]) [class*="Editor-module_editorsWrapper"],',
+          '  body:has([data-page-id]) [class*="Editor-module_editor"],',
+          '  body:has([data-page-id]) [class*="App-module_app"],',
+          '  body:has([data-page-id]) [class*="App-module_left"],',
+          '  body:has([data-page-id]) [class*="App-module_right"],',
+          '  body:has([data-page-id]) [class*="App-module_canvas"],',
+          '  body:has([data-page-id]) [class*="StructEditor-module_canvas"],',
+          '  [class*="StructEditor-module_canvas"] svg:not(g svg):has([data-page-id]) {',
+          '    background-color: #1d1f23 !important;',
+          '    filter: none !important;',
+          '  }',
+          '  rect[data-document-background="1"] {',
+          '    fill: #1d1f23 !important;',
+          '  }',
+          '  g#molstudio-page-layer > text {',
+          '    fill: #9ba5b4 !important;',
+          '  }',
+          '}'
+        ].join('\\n');
+      } else {
+        style.textContent = [
+          '@media (prefers-color-scheme: dark) {',
+          '  html, body { background: #1a1a1a !important; color-scheme: dark; }',
+          '  body[data-doc-mode="paper"] { background: #1d1f23 !important; }',
+          '}'
+        ].join('\\n');
+      }
+      (document.head || document.documentElement).appendChild(style);
+    })();
+    """
+
     static let mechPasteboardType = NSPasteboard.PasteboardType("local.molstudio.mechanism")
 
+    @discardableResult
     private func writeMechanismClipboard(_ text: String) -> Bool {
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -875,44 +1291,383 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     }
 
     private func readMechanismClipboard() -> String? {
-        guard let s = NSPasteboard.general.string(forType: Self.mechPasteboardType), !s.isEmpty else { return nil }
+        guard let s = NSPasteboard.general.string(forType: Self.mechPasteboardType), !s.isEmpty else {
+            return nil
+        }
         return s
     }
 
-    private func sendStandardClipboardAction(_ action: Selector, command: String) {
+    @discardableResult
+    private func performCanvasClipboard(_ action: WorkspaceCanvasClipboardAction, sender: Any? = nil) -> Bool {
+        let selector: Selector
+        switch action {
+        case .copy: selector = #selector(NSText.copy(_:))
+        case .cut: selector = #selector(NSText.cut(_:))
+        case .paste: selector = #selector(NSText.paste(_:))
+        }
+        let command = action.rawValue
+        let sourceWindow = targetEditWindow
         let send = {
-            if !NSApp.sendAction(action, to: nil, from: nil) {
-                self.dbg("CLIP standard \(command) has no responder")
+            if let keyWin = NSApp.keyWindow, keyWin === sourceWindow {
+                if !NSApp.sendAction(selector, to: nil, from: sender) {
+                    self.dbg("CLIP standard \(command) has no responder")
+                }
+            } else if let sourceWindow, sourceWindow === self.window, let web = self.web {
+                guard WorkspaceFocusRouter.classifyFocusOwner(in: sourceWindow, canvasView: web) != .nativeText else {
+                    self.dbg("CLIP standard \(command) yielded to native text")
+                    return
+                }
+                if sourceWindow.firstResponder !== web {
+                    sourceWindow.makeFirstResponder(web)
+                }
+                if !NSApp.sendAction(selector, to: web, from: sender) {
+                    self.dbg("CLIP standard \(command) direct web target failed")
+                }
+            } else {
+                self.dbg("CLIP standard \(command) has no key window")
             }
         }
-        if let keyWindow = NSApp.keyWindow ?? window, hasNativeEditableFirstResponder(in: keyWindow) {
-            send()
-            return
-        }
-        let sourceWindow = NSApp.keyWindow
         let gen = navigationGeneration
+        if action == .paste, let mechText = readMechanismClipboard() {
+            let pasteJS = """
+            if (window.k3dAPI && window.k3dAPI.focusedIsEditable && window.k3dAPI.focusedIsEditable()) {
+              return "editable";
+            }
+            if (window.k3dAPI && window.k3dAPI.mechPaste) {
+              const pasted = await window.k3dAPI.mechPaste(\(jsonLiteral(mechText)));
+              return pasted ? "pasted" : "fallback";
+            }
+            return "fallback";
+            """
+            jsValue(pasteJS) { value, ok in
+                guard gen == self.navigationGeneration else { return }
+                if let activeKey = NSApp.keyWindow, activeKey !== sourceWindow {
+                    self.dbg("CLIP standard paste cancelled after focus changed")
+                    return
+                }
+                let state = (ok ? value as? String : nil) ?? "fallback"
+                if state != "pasted" {
+                    send()
+                }
+            }
+            return true
+        }
         let expr = "return !!(window.k3dAPI && window.k3dAPI.prepareNativeClipboard && window.k3dAPI.prepareNativeClipboard(\(jsonLiteral(command))))"
         jsValue(expr) { _, ok in
             guard gen == self.navigationGeneration else { return }
-            guard NSApp.keyWindow === sourceWindow else {
+            if let activeKey = NSApp.keyWindow, activeKey !== sourceWindow {
                 self.dbg("CLIP standard \(command) cancelled after focus changed")
                 return
             }
             if !ok { self.dbg("CLIP standard \(command) preparation failed") }
             send()
         }
+        return true
+    }
+
+    @discardableResult
+    private func performCopy() -> Bool {
+        routeEditAction(#selector(NSText.copy(_:)))
+    }
+
+    @discardableResult
+    private func performCut() -> Bool {
+        routeEditAction(#selector(NSText.cut(_:)))
+    }
+
+    @discardableResult
+    private func performPaste() -> Bool {
+        routeEditAction(#selector(NSText.paste(_:)))
     }
 
     @objc func actCopy() {
-        sendStandardClipboardAction(#selector(NSText.copy(_:)), command: "copy")
+        _ = performCopy()
     }
 
     @objc func actCut() {
-        sendStandardClipboardAction(#selector(NSText.cut(_:)), command: "cut")
+        _ = performCut()
     }
 
     @objc func actPaste() {
-        sendStandardClipboardAction(#selector(NSText.paste(_:)), command: "paste")
+        _ = performPaste()
+    }
+
+    // MARK: 纸页模式操作（宿主驱动对话 + JS 文档接口）
+    @objc func actSwitchToPaperMode() {
+        guard pageUsable, !navigationInFlight else { return }
+        let setup = welcomeModel?.paperSetup ?? WelcomePaperSetup()
+        let gen = navigationGeneration
+        let finish: (Bool, String?) -> Void = { [weak self] ok, message in
+            guard let self, gen == self.navigationGeneration else { return }
+            if ok {
+                self.pollActiveSnapshot(); self.updateTitle()
+                WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.window, canvasView: self.web)
+            } else { self.alert("切换失败", message ?? "当前画布暂无法切换为纸页文档。") }
+        }
+        // setPageSetup preserves objects; init() would create a fresh document.
+        let args: WorkspaceJSONObject = [
+            "mode": .string("paper"),
+            "size": .string(setup.size.rawValue),
+            "orientation": .string(setup.orientation.rawValue),
+            "marginMm": .number(setup.margins.top * 25.4 / 72)
+        ]
+        if let coord = workspaceCoordinator, coord.isCommandSupported("document.page.setup") {
+            coord.dispatchCommand(id: "document.page.setup", args: args) { result in
+                if case .success(let reply) = result { finish(reply.ok, reply.error?.message) }
+                else { finish(false, "桥接命令未返回结果") }
+            }
+        } else if let opts = setup.toJSONString() {
+            jsValue("if (!window.k3dAPI?.document?.init) return false; const r = await window.k3dAPI.document.init(\(opts)); return r?.mode === 'paper';") { value, ok in
+                finish(ok && (value as? Bool) == true, "当前画布暂无法切换为纸页文档。")
+            }
+        }
+    }
+
+    @objc func actSwitchToCanvasMode() {
+        guard pageUsable, !navigationInFlight else { return }
+        let gen = navigationGeneration
+        let confirm = NSAlert()
+        confirm.messageText = "切换回无边画布？"
+        confirm.informativeText = "化学结构会保留在画布中，多页纸页排版框将隐藏。"
+        confirm.addButton(withTitle: "切换")
+        confirm.addButton(withTitle: "取消")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+        let finish: (Bool, String?) -> Void = { [weak self] ok, message in
+            guard let self, gen == self.navigationGeneration else { return }
+            if ok {
+                self.pollActiveSnapshot(); self.updateTitle()
+                WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.window, canvasView: self.web)
+            } else { self.alert("切换失败", message ?? "无法切换回无边画布。") }
+        }
+        let args: WorkspaceJSONObject = ["mode": .string("canvas")]
+        if let coord = workspaceCoordinator, coord.isCommandSupported("document.page.setup") {
+            coord.dispatchCommand(id: "document.page.setup", args: args) { result in
+                if case .success(let reply) = result { finish(reply.ok, reply.error?.message) }
+                else { finish(false, "桥接命令未返回结果") }
+            }
+        } else {
+            jsValue("if (!window.k3dAPI?.document?.init) return false; const r = await window.k3dAPI.document.init({ mode: 'canvas' }); return r?.mode === 'canvas';") { value, ok in
+                finish(ok && (value as? Bool) == true, "无法切换回无边画布。")
+            }
+        }
+    }
+
+    @objc func actPaperSetup() {
+        guard pageUsable, !navigationInFlight else { return }
+        let doc = workspaceCoordinator?.uiState.document
+        let alertPanel = NSAlert()
+        alertPanel.messageText = "纸页设置"
+        alertPanel.informativeText = "调整纸张规格、方向与页边距（mm）。"
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 260, height: 90)
+
+        let sizePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        // document-model only accepts A4 / Letter; A3 was never implemented.
+        sizePopup.addItems(withTitles: ["A4", "Letter"])
+        if let cur = doc?.size, ["A4", "Letter"].contains(cur) {
+            sizePopup.selectItem(withTitle: cur)
+        }
+
+        let orientPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        orientPopup.addItems(withTitles: ["纵向 (Portrait)", "横向 (Landscape)"])
+        orientPopup.selectItem(at: (doc?.orientation == "landscape") ? 1 : 0)
+
+        let marginField = NSTextField(string: String(Int((doc?.marginMm ?? 15).rounded())))
+        marginField.frame = NSRect(x: 0, y: 0, width: 80, height: 22)
+
+        for (lbl, ctrl) in [("纸张尺寸", sizePopup), ("页面方向", orientPopup), ("页边距 (mm)", marginField)] as [(String, NSView)] {
+            let row = NSStackView(views: [NSTextField(labelWithString: lbl), ctrl])
+            row.orientation = .horizontal
+            row.spacing = 10
+            stack.addArrangedSubview(row)
+        }
+        alertPanel.accessoryView = stack
+        alertPanel.addButton(withTitle: "应用")
+        alertPanel.addButton(withTitle: "取消")
+        guard alertPanel.runModal() == .alertFirstButtonReturn else { return }
+
+        let size = sizePopup.selectedItem?.title ?? "A4"
+        let orientation = (orientPopup.indexOfSelectedItem == 1) ? "landscape" : "portrait"
+        let marginMm = max(0, min(50, Double(marginField.stringValue) ?? 15))
+        let marginPt = marginMm * 72 / 25.4
+        let gen = navigationGeneration
+        let finish: () -> Void = { [weak self] in
+            guard let self, gen == self.navigationGeneration else { return }
+            self.pollActiveSnapshot()
+            WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.window, canvasView: self.web)
+        }
+        // Real command path: document.page.setup → documentController.setPageSetup.
+        // Fallback uses the actual k3dAPI.document.setPageSetup signature
+        // (margins in points), not the removed updateSetup/marginMm stubs.
+        let args: WorkspaceJSONObject = [
+            "mode": .string("paper"), "size": .string(size),
+            "orientation": .string(orientation), "marginMm": .number(marginMm)
+        ]
+        if let coord = workspaceCoordinator, coord.isCommandSupported("document.page.setup") {
+            coord.dispatchCommand(id: "document.page.setup", args: args) { [weak self] result in
+                guard let self, gen == self.navigationGeneration else { return }
+                if case .success(let reply) = result, !reply.ok {
+                    self.alert("页面设置失败", reply.error?.message ?? "未能应用页面设置")
+                }
+                finish()
+            }
+        } else {
+            let margins: [String: Any] = ["top": marginPt, "right": marginPt, "bottom": marginPt, "left": marginPt]
+            let payload: [String: Any] = ["mode": "paper", "size": size, "orientation": orientation, "margins": margins]
+            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            jsValue("if (!window.k3dAPI?.document?.setPageSetup) return false; await window.k3dAPI.document.setPageSetup(\(json)); return true;") { [weak self] value, ok in
+                guard let self, gen == self.navigationGeneration else { return }
+                if !ok || (value as? Bool) != true { self.alert("页面设置失败", "无法应用页面设置。") }
+                finish()
+            }
+        }
+    }
+
+    @objc func actAddPaperPage() {
+        guard pageUsable, !navigationInFlight else { return }
+        let gen = navigationGeneration
+        // Same nativeUI channel as every other document mutation: epoch +
+        // requestId guarded, single undo commit inside the JS controller.
+        workspaceCoordinator?.dispatchCommand(id: "document.page.add") { [weak self] result in
+            guard let self, gen == self.navigationGeneration else { return }
+            if case .success(let reply) = result, reply.ok {
+                self.pollActiveSnapshot()
+            } else if case .success(let reply) = result {
+                self.setStatus(reply.error?.message ?? "新增页面失败")
+            } else {
+                self.setStatus("无法读取页面状态，未新增")
+            }
+            WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.window, canvasView: self.web)
+        }
+    }
+
+    @objc func actRemoveBlankLastPage() {
+        guard pageUsable, !navigationInFlight else { return }
+        let gen = navigationGeneration
+        let finish: (Bool, String?) -> Void = { [weak self] success, message in
+            guard let self, gen == self.navigationGeneration else { return }
+            if success { self.pollActiveSnapshot() }
+            else { self.setStatus(message ?? "末页非空白或仅有单页，未删除") }
+            WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.window, canvasView: self.web)
+        }
+        if let coord = workspaceCoordinator, coord.isCommandSupported("document.page.removeLastBlank") {
+            coord.dispatchCommand(id: "document.page.removeLastBlank") { result in
+                if case .success(let reply) = result, reply.ok {
+                    finish(true, nil)
+                } else if case .success(let reply) = result {
+                    finish(false, reply.error?.message ?? "末页含内容或仅有单页，未删除")
+                } else {
+                    finish(false, "无法读取页面状态，未删除")
+                }
+            }
+        } else {
+            // Real controller method: removePage(lastId) validates emptiness.
+            jsValue("""
+            const doc = window.k3dAPI?.document;
+            if (!doc?.removePage) return false;
+            const s = doc.getState?.();
+            if (!s?.pages?.length || s.pages.length < 2) return false;
+            return await doc.removePage(s.pages[s.pages.length - 1].id);
+            """) { value, ok in
+                finish(ok && (value as? Bool) == true, "末页非空白或仅有单页，未删除")
+            }
+        }
+    }
+
+    @objc func actInsertImageIntoDocument() {
+        guard pageUsable, !navigationInFlight else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .gif]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let fileSize = (attrs[.size] as? NSNumber)?.intValue,
+              fileSize > 0, fileSize <= 20 * 1024 * 1024,
+              let data = try? Data(contentsOf: url) else {
+            return alert("无法插入图片", "仅支持 20 MB 以内的 PNG / JPEG / WebP / GIF 图片。")
+        }
+        let mime: String = {
+            switch url.pathExtension.lowercased() {
+            case "jpg", "jpeg": return "image/jpeg"
+            case "gif": return "image/gif"
+            case "webp": return "image/webp"
+            default: return "image/png"
+            }
+        }()
+        let dataUrl = "data:\(mime);base64,\(data.base64EncodedString())"
+        let gen = navigationGeneration
+        let finish: () -> Void = { [weak self] in
+            guard let self, gen == self.navigationGeneration else { return }
+            self.pollActiveSnapshot()
+            WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.window, canvasView: self.web)
+        }
+        // Real native path: document.addImage -> documentController.addImage
+        // (one undo entry, real SVG object). No hidden <input type=file>.
+        let args: WorkspaceJSONObject = ["dataUrl": .string(dataUrl),
+            "point": .object(["x": .number(3), "y": .number(4)]),
+            "w": .number(6), "h": .number(4.5)]
+        if let coord = workspaceCoordinator, coord.isCommandSupported("document.addImage") {
+            coord.dispatchCommand(id: "document.addImage", args: args) { [weak self] result in
+                guard let self, gen == self.navigationGeneration else { return }
+                if case .success(let reply) = result, !reply.ok {
+                    self.alert("插入图片失败", reply.error?.message ?? "纸页文档未能添加所选图片。")
+                }
+                finish()
+            }
+        } else {
+            jsValue("if (!window.k3dAPI?.document?.addImage) return false; await window.k3dAPI.document.addImage({ x: 3, y: 4, w: 6, h: 4.5, dataUrl: \(jsonLiteral(dataUrl)) }); return true;") { [weak self] value, ok in
+                guard let self, gen == self.navigationGeneration else { return }
+                if !ok || (value as? Bool) != true { self.alert("插入图片失败", "纸页文档未能添加所选图片。") }
+                finish()
+            }
+        }
+    }
+
+    @objc func actInsertFileIntoDocument() {
+        guard pageUsable, !navigationInFlight else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = contentTypes(["molwork", "ket"])
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else {
+            return alert("无法读取文件", "无法打开 \(url.lastPathComponent)。")
+        }
+        let gen = navigationGeneration
+        let name = url.lastPathComponent
+        let finish: () -> Void = { [weak self] in
+            guard let self, gen == self.navigationGeneration else { return }
+            self.pollActiveSnapshot()
+            WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.window, canvasView: self.web)
+        }
+        let args: WorkspaceJSONObject = ["text": .string(text), "name": .string(name)]
+        if let coord = workspaceCoordinator, coord.isCommandSupported("document.importFile") {
+            coord.dispatchCommand(id: "document.importFile", args: args) { [weak self] result in
+                guard let self, gen == self.navigationGeneration else { return }
+                if case .success(let reply) = result, !reply.ok {
+                    self.alert("插入失败", reply.error?.message ?? "请确认文件格式有效。")
+                } else {
+                    self.setStatus("已载入 \(name)，移动鼠标放置，Esc 取消")
+                }
+                finish()
+            }
+        } else {
+            // The real browser/native API is documentController.importFile.
+            jsValue("if (!window.k3dAPI?.document?.importFile) return { ok: false, error: '文档插入接口未就绪' }; return await window.k3dAPI.document.importFile(\(jsonLiteral(text)), { name: \(jsonLiteral(name)) });") { [weak self] value, ok in
+                guard let self, gen == self.navigationGeneration else { return }
+                if let dict = value as? [String: Any], dict["ok"] as? Bool == true {
+                    self.setStatus("已载入 \(name)，移动鼠标放置，Esc 取消")
+                } else {
+                    let errMsg = (value as? [String: Any])?["error"] as? String ?? "请确认文件格式有效。"
+                    self.alert("插入失败", errMsg)
+                }
+                finish()
+            }
+        }
     }
 
 
@@ -947,11 +1702,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     }
 
     /// 画布快照 JS：优先取完整工作台快照（KET + 绑定 + 机理层）；
-    /// 工作台未就绪时允许使用标准 KET，保证启动错误时仍可处理保存/退出。
+    /// 工作台接口缺失时允许使用标准 KET；接口报错时不能丢弃文档数据而降级。
     static func canvasSnapshotJS() -> String {
         return """
         if (window.k3dAPI && typeof window.k3dAPI.serializeWorkbench === 'function') {
-          try { return await window.k3dAPI.serializeWorkbench(); } catch (e) { }
+          return await window.k3dAPI.serializeWorkbench();
         }
         return await window.k3dAPI.getKet();
         """
@@ -979,14 +1734,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             return "不是 MolStudio 工作台文件（format 字段不匹配）。"
         }
         guard let version = obj["version"] as? NSNumber,
-              String(cString: version.objCType) != "c", version.doubleValue == 1 else {
-            return "工作台文件版本不受支持；当前支持 version 1。"
+              String(cString: version.objCType) != "c", [1.0, 2.0].contains(version.doubleValue) else {
+            return "工作台文件版本不受支持；当前支持 version 1 和 2。"
         }
         guard obj["ket"] is [String: Any], obj["bindings"] is [String: Any],
               obj["mechanism"] is [String: Any] else {
             return "工作台文件缺少 ket、bindings 或 mechanism 对象。"
         }
+        if version.doubleValue == 2 && !(obj["document"] is [String: Any]) {
+            return "工作台 v2 文件缺少 document 对象。"
+        }
         return nil
+    }
+
+    // MARK: 工作台分层就绪（Cmd+O .molwork 修复）
+    /// k3dAPI.isReady 只覆盖 Ketcher；reactionSteps / agentTask 由 agent-bridge 在机理层
+    /// 就绪后异步安装（agent-bridge.js 尾部轮询 → createBridge → app.reactionSteps）。
+    /// 新导航上立即注入含 reactionSteps 的 .molwork 会得到
+    /// "反应步骤层尚未就绪，未替换画布"并回滚。载入前必须按本快照实际需要等待分层。
+    private struct WorkbenchLayerRequirements {
+        var reactionSteps = false
+        var document = false
+        var agentTask = false
+    }
+
+    /// 从快照外壳判断 loadWorkbench 需要哪些分层；字段级校验仍在 loadWorkbench。
+    /// 与 main.js loadWorkbench 的就绪检查保持同一真值语义（数组非空 / 对象存在）。
+    private func workbenchRequiredLayers(_ text: String) -> WorkbenchLayerRequirements {
+        guard let data = normalizedCanvasFileText(text).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return WorkbenchLayerRequirements()
+        }
+        let hasSteps = ((obj["reactionSteps"] as? [Any])?.isEmpty == false)
+            || ((obj["reactionStepOperations"] as? [Any])?.isEmpty == false)
+        let hasDocument = obj["document"] is [String: Any]
+        let hasAgentTask = obj["agentTask"] is [String: Any]
+        return WorkbenchLayerRequirements(reactionSteps: hasSteps, document: hasDocument, agentTask: hasAgentTask)
+    }
+
+    /// 等待本快照需要的实际分层就绪（按导航序号 gen 作废；超时或真实初始化失败带原因退出）。
+    /// bootError / bridgeFailure 是机理层启动 / agent-bridge 装载的确定性失败信号：
+    /// 它们一旦出现就不会再就绪，立即失败并报告真实原因，不做盲目重试或固定延时。
+    private func waitWorkbenchLayersReady(gen: Int, required: WorkbenchLayerRequirements,
+                                          attemptsLeft: Int, _ done: @escaping (Bool, String) -> Void) {
+        guard gen == navigationGeneration else { return done(false, "导航已切换") }
+        guard attemptsLeft > 0 else { return done(false, "工作台分层未能在限时内就绪") }
+        let probe = """
+        const app = window.MolWorkbench && window.MolWorkbench.app;
+        const bridgeBox = window.MolWorkbench && window.MolWorkbench.agentBridge;
+        return JSON.stringify({
+          ready: !!(app && app.ready && window.k3dAPI && window.k3dAPI.workbenchReady && window.k3dAPI.workbenchReady()),
+          reactionSteps: !!(app && app.reactionSteps),
+          document: !!(app && app.documentController),
+          agentTask: !!(app && app.agentTask),
+          bootError: (app && app.error) || null,
+          bridgeFailure: (bridgeBox && bridgeBox.bridgeFailure) || null
+        });
+        """
+        jsValue(probe) { [weak self] value, ok in
+            guard let self else { return done(false, "窗口已关闭") }
+            guard gen == self.navigationGeneration else { return done(false, "导航已切换") }
+            if ok, let text = value as? String, let data = text.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let ready = obj["ready"] as? Bool ?? false
+                let hasSteps = obj["reactionSteps"] as? Bool ?? false
+                let hasDocument = obj["document"] as? Bool ?? false
+                let hasAgentTask = obj["agentTask"] as? Bool ?? false
+                if ready
+                    && (!required.reactionSteps || hasSteps)
+                    && (!required.document || hasDocument)
+                    && (!required.agentTask || hasAgentTask) {
+                    return done(true, "")
+                }
+                // 分层尚未齐备：先看是否有确定性失败，再继续轮询。
+                if let failure = obj["bootError"] as? String, !failure.isEmpty { return done(false, failure) }
+                if let failure = obj["bridgeFailure"] as? String, !failure.isEmpty { return done(false, failure) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.waitWorkbenchLayersReady(gen: gen, required: required, attemptsLeft: attemptsLeft - 1, done)
+            }
+        }
     }
 
     /// 从完整快照里取出标准 KET 文本（给 .ket 保存/导出用）
@@ -1030,6 +1857,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         return lp + ar > 0
     }
 
+    private func snapshotHasDocument(_ snapshot: String) -> Bool {
+        guard isWorkbenchSnapshot(snapshot),
+              let data = normalizedCanvasFileText(snapshot).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return obj["document"] is [String: Any]
+    }
+
     /// 从画布读取完整工作台快照。
     /// nil = 读取失败（JS 报错或非字符串），调用方不得当作成功。
     /// 页面不可用（载入失败/崩溃）时返回内存快照：会话里的内容就是最后一份可信数据，
@@ -1058,6 +1892,126 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         let s = session
         let name = s.fileURL?.lastPathComponent ?? sessionName(activeMode)
         window.title = "MolStudio — " + name + (s.dirty ? " •" : "")
+        syncWorkspaceCoordinatorState()
+    }
+
+    private func syncWorkspaceCoordinatorState() {
+        guard let coordinator = workspaceCoordinator else { return }
+        let docMode: WorkspaceViewportMode =
+            (coordinator.uiState.viewport.mode == .paper || snapshotHasDocument(session.currentSnapshot))
+            ? .paper : .canvas
+        let saveText: String = {
+            if navigationInFlight { return "正在载入…" }
+            if !pageUsable || pageQuarantined { return "页面未就绪" }
+            return session.dirty ? "未保存" : "已保存"
+        }()
+        let meta = WorkspaceDocumentMetadata(
+            displayTitle: session.fileURL?.lastPathComponent ?? sessionName(activeMode),
+            fileURL: session.fileURL,
+            documentMode: docMode,
+            isDirty: session.dirty,
+            isPageUsable: pageUsable && !pageQuarantined,
+            isNavigationInFlight: navigationInFlight,
+            saveStatusText: saveText
+        )
+
+        if navigationInFlight {
+            if coordinator.navigationGeneration != navigationGeneration || coordinator.attachedEpoch != nil {
+                coordinator.beginNavigation(generation: navigationGeneration)
+            }
+            coordinator.updateDocumentMetadata(meta)
+            return
+        }
+
+        if pageUsable && !pageQuarantined {
+            if coordinator.navigationGeneration != navigationGeneration {
+                coordinator.beginNavigation(generation: navigationGeneration)
+            }
+            coordinator.updateDocumentMetadata(meta)
+            if coordinator.attachedEpoch == nil && !coordinator.isAttaching && workspaceAttachFallbackGeneration != navigationGeneration {
+                attachWorkspaceCoordinator()
+            }
+            return
+        }
+
+        if coordinator.attachedEpoch != nil {
+            coordinator.detachCurrentEpoch()
+        } else if coordinator.navigationGeneration != navigationGeneration {
+            coordinator.beginNavigation(generation: navigationGeneration)
+        }
+        coordinator.updateDocumentMetadata(meta)
+    }
+
+    private func attachWorkspaceCoordinator() {
+        guard let coordinator = workspaceCoordinator,
+              pageUsable,
+              !navigationInFlight,
+              !pageQuarantined else { return }
+        guard coordinator.attachedEpoch == nil, !coordinator.isAttaching else { return }
+        let gen = navigationGeneration
+        // Bounded liveness guard for the takeover itself. This is a failure
+        // convergence timeout (not a delay to hide a flash): the cover is only
+        // lifted by the success receipt below, never by this timer.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let self, gen == self.navigationGeneration,
+                  self.workspaceCoordinator?.attachedEpoch == nil,
+                  self.workspaceSplitVC?.canvasHostViewController.isNavigationLoading == true else { return }
+            self.failAttachNatively(gen: gen)
+        }
+        coordinator.attach(preparedSurfaces: WorkspaceSurface.allCases) { [weak self] result in
+            guard let self, gen == self.navigationGeneration,
+                  !self.navigationInFlight, !self.pageQuarantined else { return }
+            if case .success(let reply) = result, reply.ok,
+               let epoch = reply.epoch, epoch.navigationGeneration == gen {
+                // Trusted, generation-checked success: only now reveal the
+                // native-first canvas. No fixed delay, no stale-frame flash.
+                self.workspaceSplitVC?.canvasHostViewController.setNavigationCoverVisible(false)
+                WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.window, canvasView: self.web)
+                self.workspaceSplitVC?.canvasHostViewController.publishHostViewportIfNeeded(force: true)
+                if self.workspaceSplitVC?.inspectorViewController.selectedTab == .agent {
+                    coordinator.loadAgentSettings()
+                }
+            } else {
+                self.failAttachNatively(gen: gen)
+            }
+        }
+    }
+
+    /// Native takeover failed or timed out: keep the opaque cover, show an
+    /// actionable AppKit error state, and retain the in-memory document.
+    /// The retired web toolbar is never revealed as an error fallback.
+    private func failAttachNatively(gen: Int) {
+        guard gen == navigationGeneration, !pageQuarantined,
+              workspaceAttachFallbackGeneration != gen else { return }
+        workspaceAttachFallbackGeneration = gen
+        workspaceCoordinator?.abandonPendingAttach()
+        let script = """
+        const b = window.MolWorkbench?.nativeUI?.current?.();
+        if (b?.attached && b.epoch?.navigationGeneration === \(gen)) b.detach(b.epoch);
+        return !!(b && !b.attached);
+        """
+        jsValue(script) { [weak self] _, ok in
+            guard let self, gen == self.navigationGeneration else { return }
+            if !ok {
+                self.workspaceSplitVC?.canvasHostViewController.showNavigationFailure(
+                    reason: "原生接管失败，且无法安全清理旧接管状态。当前文档仍保存在内存中。",
+                    canSave: true)
+            } else {
+                self.workspaceSplitVC?.canvasHostViewController.showNavigationFailure(
+                    reason: "原生界面未能完成接管。当前内容仍保存在内存中，可重新载入；保存、关闭、退出不会丢失数据。",
+                    canSave: true)
+            }
+        }
+        // A page that never answers JS evaluation must still reach an error
+        // state; this is a bounded liveness guard, not a fixed "hide the flash"
+        // delay (the cover is never lifted by a timer).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, gen == self.navigationGeneration,
+                  self.workspaceSplitVC?.canvasHostViewController.isNavigationLoading == true else { return }
+            self.workspaceSplitVC?.canvasHostViewController.showNavigationFailure(
+                reason: "编辑器没有响应接管请求。当前内容仍保存在内存中，可重新载入；旧网页工具栏不会被显示。",
+                canSave: true)
+        }
     }
 
     /// 会话的显示名（无文件身份时用），提示文案共用（R04）
@@ -1197,6 +2151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         openRequestGeneration += 1
         // 先隔离旧页面并作废在途回调，不能让迟到的轮询/注入重新提交已丢弃的内容。
         navigationGeneration += 1
+        workspaceAttachFallbackGeneration = nil
         navigationInFlight = false
         pageUsable = false
         pageQuarantined = true
@@ -1217,147 +2172,151 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
 
     // MARK: 文件管理
     private func setupDocuments() {
-        // 放 Application Support：避免 macOS 的 Documents TCC 授权弹窗（不可见 Space 时会静默挂起启动）
-        let docs = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        docsDir = docs.appendingPathComponent("Ketcher3D", isDirectory: true)
+        docsDir = AppRuntimeConfig.shared.docsDirectoryURL
         try? FileManager.default.createDirectory(at: docsDir, withIntermediateDirectories: true)
+        ensureWelcomeModel()
         refreshFileList()
         // 注意：不要再在启动路径上碰 ~/Documents（旧目录迁移早已完成）——
         // Documents 有 TCC 保护，后台 Space 首次访问会静默弹授权框挂死启动（见项目记忆）。
     }
 
+    private func ensureWelcomeModel() {
+        if welcomeModel != nil { return }
+        let examples = exampleDocumentURL() == nil ? [] : [WelcomeExampleItem(id: "sn2-oh-ch3br", title: "OH⁻ + CH₃Br 机理", subtitle: "孤对电子与弯箭头")]
+        let model = WelcomeViewModel(
+            defaults: AppRuntimeConfig.shared.userDefaults,
+            appDirectoryURL: docsDir,
+            thumbnailsDirectoryURL: docsDir.appendingPathComponent("thumbnails", isDirectory: true),
+            examples: examples,
+            recentURLsProvider: { AppRuntimeConfig.shared.recentURLs() },
+            initialRecentItems: nil
+        )
+        welcomeModel = model
+        welcomeRecentsCancellable = model.$recentItems
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] items in
+                self?.workspaceSplitVC?.libraryViewController.setRecentItems(items)
+            }
+    }
+
     private func refreshFileList() {
-        // 真·POSIX opendir/readdir：Foundation 的目录枚举底层走 CFURLEnumerator，本机偶发 open() 挂起
-        var urls: [URL] = []
-        if let dp = opendir(docsDir.path) {
-            defer { closedir(dp) }
-            while let entry = readdir(dp) {
-                let name = withUnsafeBytes(of: entry.pointee.d_name) { raw -> String in
-                    let ptr = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
-                    return String(cString: ptr)
+        welcomeModel?.reloadRecentsAsync()
+    }
+
+    /// Only successful opens/saves enter the recent-documents list.
+    private func noteRecentDocument(_ url: URL) {
+        let canonical = URL(fileURLWithPath: WelcomeRecents.canonicalPath(for: url))
+        AppRuntimeConfig.shared.noteRecentURL(canonical)
+        welcomeModel?.noteOpened(canonical)
+        refreshFileList()
+    }
+
+    private func removeRecentItem(_ item: WelcomeRecentItem) {
+        AppRuntimeConfig.shared.removeIsolatedRecentURL(item.url)
+        welcomeModel?.removeRecent(item)
+    }
+
+    /// Best-effort cache, fenced by file identity, session, navigation, save
+    /// generation and the exact saved snapshot. Never changes dirty state.
+    private func scheduleWelcomeThumbnail(url: URL, snapshot: String) {
+        guard let directory = docsDir?.appendingPathComponent("thumbnails", isDirectory: true),
+              let stamp = WelcomeThumbnailCache.stamp(url), pageUsable, !navigationInFlight else { return }
+        thumbnailGeneration += 1
+        let request = thumbnailGeneration, generation = navigationGeneration, session = canvasSession, saveGeneration = session.saveGeneration
+        let digest = SHA256.hash(data: Data(snapshot.utf8)).map { String(format: "%02x", $0) }.joined()
+        let valid: () -> Bool = { [weak self, weak session] in
+            guard let self, let session else { return false }
+            return self.thumbnailGeneration == request && self.navigationGeneration == generation && !self.navigationInFlight && self.pageUsable &&
+                self.canvasSession === session && session.saveGeneration == saveGeneration && session.fileURL == url &&
+                session.savedBaseline == snapshot && WelcomeThumbnailCache.stamp(url) == stamp
+        }
+        let body = """
+        const hash = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), n => n.toString(16).padStart(2,'0')).join('');
+        const snapshot = async () => await window.k3dAPI.serializeWorkbench();
+        if (await hash(await snapshot()) !== '\(digest)') return { stale:true };
+        const controller = window.MolWorkbench?.app?.documentController;
+        const mode = controller?.active && controller.state.mode === 'paper' ? 'paper' : 'canvas';
+        let dataUrl = null;
+        try {
+          if (mode === 'paper') {
+            const output = await window.k3dAPI.document.exportPages(), page = output.ok && output.pages?.[0];
+            if (page && page.widthPt > 0 && page.heightPt > 0) {
+              const width = Math.min(480, Math.max(1, Math.floor(4096 * page.widthPt / page.heightPt)));
+              const image = await window.MolWorkbench.exporter.svgToPng(page.svg, width, width * page.heightPt / page.widthPt, 1, document.getElementById('k').contentWindow);
+              if (image.ok) dataUrl = image.dataUrl;
+            }
+          } else {
+            const image = await window.k3dAPI.exportMechanismImage('png');
+            if (image.ok && image.dataUrl) {
+              const element = new Image(); element.src = image.dataUrl; await element.decode();
+              const width = Math.min(480, Math.max(1, Math.floor(4096 * element.naturalWidth / element.naturalHeight)));
+              const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = Math.max(1, Math.round(width * element.naturalHeight / element.naturalWidth));
+              const g = canvas.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0,0,canvas.width,canvas.height); g.drawImage(element,0,0,canvas.width,canvas.height);
+              dataUrl = canvas.toDataURL('image/png');
+            }
+          }
+        } catch (_) { dataUrl = null; }
+        if (await hash(await snapshot()) !== '\(digest)') return { stale:true };
+        return { mode, dataUrl };
+        """
+        DispatchQueue.main.async { [weak self] in
+            guard let self, valid() else { return }
+            self.jsValue(body) { value, ok in
+                guard ok, valid(), let output = value as? [String: Any], output["stale"] as? Bool != true,
+                      let rawMode = output["mode"] as? String, let mode = WelcomeDocumentMode(rawValue: rawMode) else { return }
+                let prefix = "data:image/png;base64,"
+                var png: Data?
+                if let source = output["dataUrl"] as? String, source.hasPrefix(prefix), source.count <= WelcomeThumbnailCache.maxPNGBytes * 2 {
+                    png = Data(base64Encoded: String(source.dropFirst(prefix.count)))
+                    if let data = png, !WelcomeThumbnailCache.validPNG(data) { png = nil }
                 }
-                if name.hasPrefix(".") { continue }
-                let ext = (name as NSString).pathExtension.lowercased()
-                if ["ket", "mol", "sdf", "cdxml", "smi", "smiles", "molwork"].contains(ext) {
-                    urls.append(docsDir.appendingPathComponent(name))
+                self.fetchSnapshot(.canvas) { current in
+                    guard valid(), current == snapshot else { return }
+                    do {
+                        try WelcomeThumbnailCache.write(url: url, directory: directory, expectedStamp: stamp, mode: mode, png: png)
+                        self.refreshFileList()
+                    } catch { self.dbg("thumbnail cache failed: \(error.localizedDescription)") }
                 }
             }
         }
-        fileList = urls
-            .sorted { a, b in
-                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                return da > db
-            }
-        emptyLabel?.isHidden = !fileList.isEmpty
-        fileTable?.reloadData()
     }
 
     private func showWelcome() {
-        if welcomeWin != nil { welcomeWin?.makeKeyAndOrderFront(nil); return }
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
+        ensureWelcomeModel()
+        // Returning to the welcome screen must not leave the previous canvas
+        // frame visibly behind the welcome window. The opaque cover goes up
+        // immediately; the next explicit navigation replaces the frame.
+        workspaceSplitVC?.canvasHostViewController.setNavigationCoverVisible(true)
+        workspaceCoordinator?.detachCurrentEpoch()
+        if let welcomeWin {
+            refreshFileList()
+            welcomeWin.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        guard let model = welcomeModel else { return }
+        let content = WelcomeView(model: model,
+            onNewCanvas: { [weak self] in self?.actNewDocument() },
+            onNewPaper: { [weak self] setup in self?.startNewPaperDocument(setup) },
+            onOpenPanel: { [weak self] in self?.actOpen() },
+            onOpenURL: { [weak self] url in self?.openDocument(at: url) },
+            onOpenExample: { [weak self] example in
+                guard example.id == "sn2-oh-ch3br" else { return }
+                self?.actOpenExample()
+            },
+            onRemoveRecent: { [weak self] item in self?.removeRecentItem(item) },
+            onRequestRename: { [weak self] item in self?.renameRecentFile(at: item.url) },
+            onRevealInFinder: { item in NSWorkspace.shared.activateFileViewerSelecting([item.url]) })
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.title = "MolStudio"
-        w.appearance = NSAppearance(named: .aqua)
         w.isReleasedWhenClosed = false
-        w.delegate = self          // 关欢迎页且画布不可见 → 退出（见 windowShouldClose）
-        w.center()
-
-        let title = NSTextField(labelWithString: "MolStudio")
-        title.font = .systemFont(ofSize: 26, weight: .semibold)
-        let sub = NSTextField(labelWithString: "分子结构编辑与 3D 预览")
-        sub.font = .systemFont(ofSize: 13)
-        sub.textColor = .secondaryLabelColor
-
-        let newBtn = NSButton(title: "新建文件", target: self, action: #selector(actNewDocument))
-        newBtn.bezelStyle = .rounded
-        newBtn.controlSize = .large
-        newBtn.keyEquivalent = "\r"
-        let openBtn = NSButton(title: "打开…", target: self, action: #selector(actOpen))
-        openBtn.bezelStyle = .rounded
-        openBtn.controlSize = .large
-        // 示例入口：随包分发的已验收机理夹具，打开即能看到孤对与两根弯箭头
-        let exampleBtn = NSButton(title: "打开示例", target: self, action: #selector(actOpenExample))
-        exampleBtn.bezelStyle = .rounded
-        exampleBtn.controlSize = .large
-        exampleBtn.toolTip = "OH⁻ + CH₃Br 的 Sₙ2 机理（1 对孤对 + 2 根弯箭头）"
-
-        let btnRow = NSStackView(views: [newBtn, openBtn, exampleBtn])
-        btnRow.orientation = .horizontal
-        btnRow.spacing = 12
-
-        let header = NSStackView(views: [title, sub, btnRow])
-        header.orientation = .vertical
-        header.alignment = .leading
-        header.spacing = 8
-
-        let listTitle = NSTextField(labelWithString: "最近文件")
-        listTitle.font = .systemFont(ofSize: 11.5, weight: .medium)
-        listTitle.textColor = .secondaryLabelColor
-
-        let table = NSTableView()
-        table.headerView = nil
-        table.rowHeight = 30
-        table.style = .inset
-        table.allowsEmptySelection = true
-        let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
-        col.title = "文件"
-        table.addTableColumn(col)
-        table.dataSource = self
-        table.delegate = self
-        table.target = self
-        table.doubleAction = #selector(actOpenSelected)
-
-        // 右键菜单：打开 / 重命名 / 删除
-        let menu = NSMenu()
-        menu.addItem(withTitle: "打开", action: #selector(actOpenSelected), keyEquivalent: "")
-        menu.addItem(NSMenuItem(title: "重命名…", action: #selector(actRenameFromMenu(_:)), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "删除…", action: #selector(actDeleteFromMenu(_:)), keyEquivalent: ""))
-        table.menu = menu
-        let scroll = NSScrollView()
-        scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .noBorder
-        scroll.drawsBackground = false
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        fileTable = table
-
-        let stack = NSStackView(views: [header, listTitle, scroll])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 14
-        stack.edgeInsets = NSEdgeInsets(top: 28, left: 32, bottom: 24, right: 32)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let host = NSView()
-        host.addSubview(stack)
-        // 空状态提示：盖在列表区域中央，文件列表为空时显示
-        let empty = NSTextField(labelWithString: "暂无文件 — 点“新建文件”开始画第一张结构")
-        empty.font = .systemFont(ofSize: 12.5)
-        empty.textColor = .tertiaryLabelColor
-        empty.translatesAutoresizingMaskIntoConstraints = false
-        empty.isHidden = true
-        host.addSubview(empty)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: host.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 240),
-            empty.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
-            empty.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
-        ])
-        emptyLabel = empty
-        w.contentView = host
-        welcomeWin = w
+        w.delegate = self
+        w.minSize = NSSize(width: 720, height: 480)
+        w.contentView = NSHostingView(rootView: content)
+        w.center(); welcomeWin = w
         refreshFileList()
-        // 预选上次打开的文件：双击即可继续上次的工作
-        if let last = UserDefaults.standard.string(forKey: "lastFile"),
-           let row = fileList.firstIndex(where: { $0.path == last }) {
-            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            table.scrollRowToVisible(row)
-        }
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -1371,6 +2330,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         }
     }
 
+    @objc func actNewPaperDocument() {
+        startNewPaperDocument(welcomeModel?.paperSetup ?? WelcomePaperSetup())
+    }
+
+    private func startNewPaperDocument(_ setup: WelcomePaperSetup) {
+        openRequestGeneration += 1
+        let openRequest = openRequestGeneration
+        confirmDiscard(for: .canvas) { ok in
+            guard ok, openRequest == self.openRequestGeneration else { return }
+            self.startNavigation(to: .canvas, pending: .newPaperDocument(setup: setup))
+        }
+    }
+
     // MARK: 导航核心（B03 + R02）
     /// 加载画布并登记待注入数据；就绪后由 didFinish → applyPending 应用。
     /// R02：这里开启"导航事务"（navigationInFlight）：轮询提交/保存/离开确认挂起，
@@ -1378,6 +2350,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     private func startNavigation(to target: SessionMode, pending: PendingPayload) {
         openRequestGeneration += 1
         navigationGeneration += 1
+        // Register the new generation with the coordinator BEFORE any load so
+        // late callbacks from the previous epoch cannot be replayed onto the
+        // new page. The opaque cover goes up in the same synchronous turn.
+        workspaceCoordinator?.beginNavigation(generation: navigationGeneration)
+        workspaceCoordinator?.detachCurrentEpoch()
+        workspaceAttachFallbackGeneration = nil
+        workspaceSplitVC?.canvasHostViewController.setNavigationCoverVisible(true)
         pendingPayload = pending
         pendingGeneration = navigationGeneration
         navigationInFlight = true            // R02：事务开始
@@ -1385,9 +2364,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         pageQuarantined = false              // S01：新导航解除上一次失败的隔离
         armNavigationWatchdog()              // R02 补：事务必须有超时出口
         activeMode = target
-        let page = "canvas.html"
-        dbg("startNavigation \(page) gen=\(navigationGeneration)")
-        web.load(URLRequest(url: base.appendingPathComponent(page)))
+        // Explicit first-frame canvas mode. navGen lets the page self-check its
+        // generation; hiddenControls is applied to the Ketcher iframe at boot.
+        var components = URLComponents(url: base.appendingPathComponent("canvas.html"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "nativeCanvas", value: "1"),
+            URLQueryItem(name: "navGen", value: String(navigationGeneration))
+        ]
+        let url = components.url ?? base.appendingPathComponent("canvas.html")
+        dbg("startNavigation canvas.html?nativeCanvas=1 gen=\(navigationGeneration)")
+        web.load(URLRequest(url: url))
+        // Window is shown only after the cover is already covering the stale
+        // WebView frame; the page itself never renders the retired web UI.
         window.makeKeyAndOrderFront(nil)
         welcomeWin?.orderOut(nil)
         updateTitle()
@@ -1400,6 +2388,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         pageUsable = true
         cancelNavigationWatchdog()
         updateTitle()
+        // No fixed delay. The opaque cover is lifted only by the attach success
+        // receipt (generation-checked). A missing/failed attach is detected by
+        // the existing navigation watchdog and shown as a native error state.
+        attachWorkspaceCoordinator()
     }
 
     // MARK: 导航事务的失败出口（R02 补）
@@ -1428,6 +2420,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     /// ② 隔离当前页面（pageQuarantined），迟到的 didFinish 也不能把它重新激活；
     /// 两者都要，序号管已发出的回调，隔离管之后才到的页面事件。只有新的 startNavigation 能解除。
     private func abortNavigation(reason: String) {
+        workspaceSplitVC?.canvasHostViewController.showNavigationFailure(
+            reason: reason + "\n当前内容仍保存在内存中，可重新载入或返回欢迎页；旧网页工具栏不会被显示。",
+            canSave: session.hasSnapshot)
         openRequestGeneration += 1
         let wasInFlight = navigationInFlight
         let alreadyDegraded = !wasInFlight && !pageUsable
@@ -1520,6 +2515,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         }
     }
 
+    /// Ketcher can become ready before the separately mounted document layer.
+    private func waitPaperEditorReady(gen: Int, attemptsLeft: Int, _ done: @escaping (Bool) -> Void) {
+        guard gen == navigationGeneration, attemptsLeft > 0 else { return done(false) }
+        let probe = "return !!(window.k3dAPI?.workbenchReady?.() && window.k3dAPI?.document?.init && window.MolWorkbench?.app?.adapter?.ed)"
+        jsValue(probe) { value, ok in
+            guard gen == self.navigationGeneration else { return done(false) }
+            if ok, value as? Bool == true { return done(true) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                self.waitPaperEditorReady(gen: gen, attemptsLeft: attemptsLeft - 1, done)
+            }
+        }
+    }
+
     /// 页面就绪后注入待载的画布数据：
     /// • 所有异步完成回调都检查导航序号 gen，只有当前导航且注入成功才提交会话身份/状态；
     /// • 注入成功且取回快照后才 endNavigationTransaction（恢复轮询提交与保存）；
@@ -1544,8 +2552,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
 
         case .newDocument:
             s.fileURL = nil
-            UserDefaults.standard.removeObject(forKey: "lastFile")
+            appUserDefaults.removeObject(forKey: "lastFile")
             freshBaselineAfterPageReady(mode: mode, forcedUnsaved: false)
+
+        case .newPaperDocument(let setup):
+            guard gen == navigationGeneration else { return }
+            guard let options = setup.toJSONString() else {
+                return rollbackAfterFailedInjection(reason: "纸张设置无法编码。")
+            }
+            let body = """
+            if (!window.k3dAPI?.document?.init || !window.MolWorkbench?.app?.adapter?.ed) throw new Error('文档编辑器尚未就绪');
+            const result = await window.k3dAPI.document.init(\(options));
+            if (result?.mode !== 'paper') throw new Error('纸页初始化失败');
+            window.MolWorkbench.app.adapter.ed.clearHistory();
+            return true;
+            """
+            waitPaperEditorReady(gen: gen, attemptsLeft: 100) { [weak self] ready in
+                guard let self, gen == self.navigationGeneration else { return }
+                guard ready else { return self.rollbackAfterFailedInjection(reason: "文档编辑器未能及时就绪。") }
+                self.jsValue(body) { value, ok in
+                    guard gen == self.navigationGeneration else { return }
+                    guard ok, value as? Bool == true else {
+                        return self.rollbackAfterFailedInjection(reason: "无法初始化纸页，原文档已保留。")
+                    }
+                    self.fetchSnapshot(mode) { snapshot in
+                        guard gen == self.navigationGeneration else { return }
+                        guard let snapshot, let data = snapshot.data(using: .utf8),
+                              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              let doc = obj["document"] as? [String: Any], doc["mode"] as? String == "paper",
+                              (obj["version"] as? NSNumber)?.intValue == 2 else {
+                            return self.rollbackAfterFailedInjection(reason: "纸页快照不可用，原文档已保留。")
+                        }
+                        s.fileURL = nil
+                        self.appUserDefaults.removeObject(forKey: "lastFile")
+                        self.commitFreshSession(s, mode: mode, snapshot: snapshot, unsaved: false)
+                    }
+                }
+            }
 
         case .openCanvasFile(let text, let url):
             guard gen == navigationGeneration else { return }
@@ -1554,44 +2597,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             if isWorkbench, let error = self.workbenchLoadError(text) {
                 return self.rollbackAfterFailedInjection(reason: "工作台载入失败：\(url.lastPathComponent)\n\(error)")
             }
-            let body = isWorkbench
-                ? "return JSON.stringify(await window.k3dAPI.loadWorkbench(\(self.jsonLiteral(text))))"
-                : "return await window.k3dAPI.setMolecule(\(self.jsonLiteral(text)))"
-            self.jsValue(body) { [weak self] value, ok in
+            let injectOpenCanvas: () -> Void = { [weak self] in
                 guard let self else { return }
-                guard gen == self.navigationGeneration else { return }   // 旧导航回调不得提交
-                var injectOK = ok
-                var detail = ""
-                if isWorkbench {
-                    // 工作台文件：loadWorkbench 返回 {ok,error}，失败必须回退且说明原因
-                    if let s = value as? String, let d = s.data(using: .utf8),
-                       let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
-                        injectOK = (obj["ok"] as? Bool) == true
-                        if !injectOK { detail = (obj["error"] as? String) ?? "" }
-                    } else {
-                        injectOK = false
-                        detail = "工作台载入没有返回结果（机理层可能未就绪）"
+                let body = isWorkbench
+                    ? "return JSON.stringify(await window.k3dAPI.loadWorkbench(\(self.jsonLiteral(text))))"
+                    : "return await window.k3dAPI.setMolecule(\(self.jsonLiteral(text)))"
+                self.jsValue(body) { [weak self] value, ok in
+                    guard let self else { return }
+                    guard gen == self.navigationGeneration else { return }   // 旧导航回调不得提交
+                    var injectOK = ok
+                    var detail = ""
+                    if isWorkbench {
+                        // 工作台文件：loadWorkbench 返回 {ok,error}，失败必须回退且说明原因
+                        if let s = value as? String, let d = s.data(using: .utf8),
+                           let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                            injectOK = (obj["ok"] as? Bool) == true
+                            if !injectOK { detail = (obj["error"] as? String) ?? "" }
+                        } else {
+                            injectOK = false
+                            detail = "工作台载入没有返回结果（机理层可能未就绪）"
+                        }
+                    }
+                    guard injectOK else {
+                        // R02：载入失败 → 不提交会话身份，回退到来源页面恢复其内容
+                        return self.rollbackAfterFailedInjection(reason: "结构载入失败：\(url.lastPathComponent)" + (detail.isEmpty ? "" : "\n\(detail)"))
+                    }
+                    s.fileURL = url
+                    appUserDefaults.set(url.path, forKey: "lastFile")
+                    self.noteRecentDocument(url)
+                    s.initialized = true
+                    self.fetchSnapshot(mode) { snap in
+                        guard gen == self.navigationGeneration else { return }
+                        if let snap {
+                            self.commitSessionSnapshot(mode, text: snap)   // 先同步当前快照，避免刚打开就显示"未保存"
+                            s.savedBaseline = snap   // 打开成功：载入内容即已保存基线
+                        } else {
+                            s.savedBaseline = ""     // 读不到基线按未保存处理（安全侧）
+                        }
+                        self.updateTitle()
+                        self.setStatus("已打开 \(url.lastPathComponent)")
+                        self.endNavigationTransaction()   // R02：注入成功且取回快照 → 事务结束
+                        if let snap { self.scheduleWelcomeThumbnail(url: url, snapshot: snap) }
                     }
                 }
-                guard injectOK else {
-                    // R02：载入失败 → 不提交会话身份，回退到来源页面恢复其内容
-                    return self.rollbackAfterFailedInjection(reason: "结构载入失败：\(url.lastPathComponent)" + (detail.isEmpty ? "" : "\n\(detail)"))
-                }
-                s.fileURL = url
-                UserDefaults.standard.set(url.path, forKey: "lastFile")
-                s.initialized = true
-                self.fetchSnapshot(mode) { snap in
-                    guard gen == self.navigationGeneration else { return }
-                    if let snap {
-                        self.commitSessionSnapshot(mode, text: snap)   // 先同步当前快照，避免刚打开就显示"未保存"
-                        s.savedBaseline = snap   // 打开成功：载入内容即已保存基线
-                    } else {
-                        s.savedBaseline = ""     // 读不到基线按未保存处理（安全侧）
+            }
+            if isWorkbench {
+                // 分层就绪等待（见 waitWorkbenchLayersReady 注释）：新导航的 isReady 不代表
+                // reactionSteps/agentTask 已安装；必须等本快照需要的层可用后再注入。
+                // 超时/失败仍走 rollbackAfterFailedInjection，来源画布内容保持原样。
+                let required = self.workbenchRequiredLayers(text)
+                self.waitWorkbenchLayersReady(gen: gen, required: required, attemptsLeft: 75) { [weak self] layersReady, failure in
+                    guard let self, gen == self.navigationGeneration else { return }
+                    guard layersReady else {
+                        let detail = failure.isEmpty ? "工作台分层未能及时就绪。" : "工作台初始化失败：\(failure)"
+                        return self.rollbackAfterFailedInjection(reason: "结构载入失败：\(url.lastPathComponent)\n\(detail)")
                     }
-                    self.updateTitle()
-                    self.setStatus("已打开 \(url.lastPathComponent)")
-                    self.endNavigationTransaction()   // R02：注入成功且取回快照 → 事务结束
+                    injectOpenCanvas()
                 }
+            } else {
+                injectOpenCanvas()
             }
 
         case .restoreSession(let text):
@@ -1600,35 +2664,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             }
             guard gen == navigationGeneration else { return }
             let restoreIsWorkbench = self.isWorkbenchSnapshot(text)
-            let body: String
-            if restoreIsWorkbench {
-                body = "return JSON.stringify(await window.k3dAPI.loadWorkbench(\(self.jsonLiteral(text))))"
-            } else {
-                body = "return await window.k3dAPI.setMolecule(\(self.jsonLiteral(text)))"
-            }
-            self.jsValue(body) { [weak self] value, ok in
+            let injectRestoreSession: () -> Void = { [weak self] in
                 guard let self else { return }
-                guard gen == self.navigationGeneration else { return }
-                var injectOK = ok
+                let body: String
                 if restoreIsWorkbench {
-                    if let sv = value as? String, let sd = sv.data(using: .utf8),
-                       let obj = try? JSONSerialization.jsonObject(with: sd) as? [String: Any] {
-                        injectOK = (obj["ok"] as? Bool) == true
-                    } else { injectOK = false }
+                    body = "return JSON.stringify(await window.k3dAPI.loadWorkbench(\(self.jsonLiteral(text))))"
+                } else {
+                    body = "return await window.k3dAPI.setMolecule(\(self.jsonLiteral(text)))"
                 }
-                guard injectOK else {
-                    // R02 补：恢复失败 → 走统一失败出口（释放事务 + 页面标为不可用）。
-                    // 旧会话的内存快照原样保留，保存/关闭/退出改用内存内容，不再把门闸永久关死；
-                    // 用户可在提示里点"重新载入"重试。
-                    return self.abortNavigation(reason: "无法把内存中的内容注入页面，页面当前内容不可信。")
-                }
-                self.fetchSnapshot(mode) { snap in
+                self.jsValue(body) { [weak self] value, ok in
+                    guard let self else { return }
                     guard gen == self.navigationGeneration else { return }
-                    if let snap { self.commitSessionSnapshot(mode, text: snap) }
-                    // 基线与文件身份都不动：恢复会话不能清 dirty
-                    self.updateTitle()
-                    self.endNavigationTransaction()
+                    var injectOK = ok
+                    if restoreIsWorkbench {
+                        if let sv = value as? String, let sd = sv.data(using: .utf8),
+                           let obj = try? JSONSerialization.jsonObject(with: sd) as? [String: Any] {
+                            injectOK = (obj["ok"] as? Bool) == true
+                        } else { injectOK = false }
+                    }
+                    guard injectOK else {
+                        // R02 补：恢复失败 → 走统一失败出口（释放事务 + 页面标为不可用）。
+                        // 旧会话的内存快照原样保留，保存/关闭/退出改用内存内容，不再把门闸永久关死；
+                        // 用户可在提示里点"重新载入"重试。
+                        return self.abortNavigation(reason: "无法把内存中的内容注入页面，页面当前内容不可信。")
+                    }
+                    self.fetchSnapshot(mode) { snap in
+                        guard gen == self.navigationGeneration else { return }
+                        if let snap { self.commitSessionSnapshot(mode, text: snap) }
+                        // 基线与文件身份都不动：恢复会话不能清 dirty
+                        self.updateTitle()
+                        self.endNavigationTransaction()
+                    }
                 }
+            }
+            if restoreIsWorkbench {
+                // 与 openCanvasFile 相同的分层就绪等待：恢复内存会话同样可能含 reactionSteps。
+                // 失败出口沿用 abortNavigation（内存快照仍是权威内容）。
+                let required = self.workbenchRequiredLayers(text)
+                self.waitWorkbenchLayersReady(gen: gen, required: required, attemptsLeft: 75) { [weak self] layersReady, failure in
+                    guard let self, gen == self.navigationGeneration else { return }
+                    guard layersReady else {
+                        let detail = failure.isEmpty ? "工作台分层未能及时就绪。" : "工作台初始化失败：\(failure)"
+                        return self.abortNavigation(reason: "无法把内存中的内容注入页面，页面当前内容不可信。（\(detail)）")
+                    }
+                    injectRestoreSession()
+                }
+            } else {
+                injectRestoreSession()
             }
 
         }
@@ -1787,23 +2869,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             }
             // 第一步：确定目标文件（未命名或另存为才弹面板）
             var url = s.fileURL
-            if forceSaveAs || url == nil {
+            let hasDocument = self.snapshotHasDocument(snapshot)
+            if forceSaveAs || url == nil || (hasDocument && url?.pathExtension.lowercased() != "molwork") {
                 let panel = NSSavePanel()
                 panel.directoryURL = self.docsDir
                 // 有机理内容默认给 .molwork（KET 装不下孤对与语义箭头）
                 let hasMech = self.snapshotHasMechanism(snapshot)
-                panel.nameFieldStringValue = url?.lastPathComponent ?? (hasMech ? "未命名.molwork" : "未命名.ket")
-                panel.allowedContentTypes = self.contentTypes(["molwork", "ket", "mol", "sdf", "smi", "smiles"])
+                panel.nameFieldStringValue = hasDocument ? (url?.deletingPathExtension().lastPathComponent ?? "未命名") + ".molwork" : (url?.lastPathComponent ?? (hasMech ? "未命名.molwork" : "未命名.ket"))
+                panel.allowedContentTypes = self.contentTypes(hasDocument ? ["molwork"] : ["molwork", "ket", "mol", "sdf", "smi", "smiles"])
                 guard panel.runModal() == .OK, let chosen = panel.url else { return done(false) } // 取消：身份不变
                 url = chosen
             }
             guard isCurrentSave() else { return done(false) }
             guard let target = url else { return done(false) }
             let ext = target.pathExtension.lowercased()
+            if hasDocument && ext != "molwork" {
+                self.alert("保存失败", "文档文字、图片和页面设置需要保存为 .molwork。")
+                return done(false)
+            }
 
             // 第三步：写盘 + 成功后才提交身份/基线/标题/最近文件
             let commit: (String, String) -> Void = { writtenText, ketBaseline in
                 guard isCurrentSave() else { return done(false) }
+                let previousBaseline = s.savedBaseline
                 do {
                     try writtenText.write(to: target, atomically: true, encoding: .utf8)
                 } catch {
@@ -1812,14 +2900,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
                 }
                 s.fileURL = target
                 s.savedBaseline = ketBaseline   // 基线 = 本次实际写入的快照
-                UserDefaults.standard.set(target.path, forKey: "lastFile")
-                self.refreshFileList()
+                if let old = originalURL, old.standardizedFileURL != target.standardizedFileURL,
+                   previousBaseline == ketBaseline, let directory = self.docsDir?.appendingPathComponent("thumbnails", isDirectory: true) {
+                    WelcomeThumbnailCache.copy(from: old, to: target, directory: directory)
+                }
+                self.appUserDefaults.set(target.path, forKey: "lastFile")
+                self.noteRecentDocument(target)
                 if mode == self.activeMode {
                     self.updateTitle()
                     self.pollActiveSnapshot()   // 立刻重算 dirty：保存等待期间的新编辑仍是未保存
                 }
                 self.setStatus("已保存 \(target.lastPathComponent)")
                 done(true)
+                if mode == self.activeMode { self.scheduleWelcomeThumbnail(url: target, snapshot: ketBaseline) }
             }
 
             // 第二步：验证目标格式 + 取要写入的内容
@@ -1955,6 +3048,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
 
     @objc func actSave() { saveSession(activeMode, forceSaveAs: false) { _ in } }
     @objc func actSaveAs() { saveSession(activeMode, forceSaveAs: true) { _ in } }
+
+    /// Export is independent of the document's file identity and dirty state.
+    /// Pages are requested through the nativeUI bridge (`document.exportPages`)
+    /// so the call carries the same epoch/requestId/idempotency guarantees as
+    /// every other document command.
+    @objc func actExportDocumentPDF() {
+        guard !documentPDFExportInFlight else { return alert("导出进行中", "请等待当前 PDF 导出完成。") }
+        guard pageUsable, !navigationInFlight else { return alert("无法导出", "画布尚未准备好。") }
+        documentPDFExportInFlight = true
+        let gen = navigationGeneration
+        let originalSession = canvasSession
+        let stillValid: () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.navigationGeneration == gen && self.canvasSession === originalSession && self.pageUsable && !self.navigationInFlight
+        }
+        /// Pages are requested through the nativeUI bridge (`document.exportPages`)
+        /// so the call carries the same epoch/requestId/idempotency guarantees as
+        /// every other document command.
+        workspaceCoordinator?.dispatchCommand(id: "document.exportPages") { [weak self] result in
+            guard let self else { return }
+            guard stillValid() else { self.documentPDFExportInFlight = false; return }
+            switch result {
+            case .failure:
+                self.documentPDFExportInFlight = false
+                self.alert("PDF 导出失败", "画布没有返回可用的页面数据。")
+            case .success(let reply):
+                guard reply.ok else {
+                    self.documentPDFExportInFlight = false
+                    return self.alert("PDF 导出失败", reply.error?.message ?? "无法生成页面。")
+                }
+                let result = reply.result?.mapValues(\.foundationValue) ?? [:]
+                guard (result["ok"] as? Bool) == true else {
+                    self.documentPDFExportInFlight = false
+                    return self.alert("PDF 导出失败", result["error"] as? String ?? "无法生成页面。")
+                }
+                guard let entries = result["pages"] as? [[String: Any]], !entries.isEmpty, entries.count <= 100 else {
+                    self.documentPDFExportInFlight = false
+                    return self.alert("PDF 导出失败", "页面列表无效或超过 100 页。")
+                }
+                var pages: [DocumentPDFExporter.Page] = []
+                for entry in entries {
+                    guard let id = entry["id"] as? String, let width = entry["widthPt"] as? Double,
+                          let height = entry["heightPt"] as? Double, let svg = entry["svg"] as? String else {
+                        self.documentPDFExportInFlight = false
+                        return self.alert("PDF 导出失败", "页面数据不完整。")
+                    }
+                    pages.append(.init(id: id, widthPt: width, heightPt: height, svg: svg))
+                }
+                let warnings = result["warnings"] as? [String] ?? []
+                if !warnings.isEmpty {
+                    let prompt = NSAlert()
+                    prompt.messageText = "导出前请注意"
+                    prompt.informativeText = warnings.prefix(10).joined(separator: "\n")
+                    prompt.addButton(withTitle: "继续导出")
+                    prompt.addButton(withTitle: "取消")
+                    guard prompt.runModal() == .alertFirstButtonReturn, stillValid() else {
+                        self.documentPDFExportInFlight = false; return
+                    }
+                }
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = (self.currentFile?.deletingPathExtension().lastPathComponent ?? "文档") + ".pdf"
+                panel.allowedContentTypes = [.pdf]
+                guard panel.runModal() == .OK, let url = panel.url, stillValid() else {
+                    self.documentPDFExportInFlight = false; return
+                }
+                let exporter = DocumentPDFExporter()
+                self.documentPDFExporter = exporter
+                exporter.export(pages: pages, isValid: stillValid) { [weak self] result in
+                    guard let self else { return }
+                    self.documentPDFExporter = nil; self.documentPDFExportInFlight = false
+                    guard stillValid() else { return }
+                    switch result {
+                    case .failure(let error): self.alert("PDF 导出失败", error.localizedDescription)
+                    case .success(let data):
+                        do {
+                            try data.write(to: url, options: .atomic)
+                            self.setStatus("已导出 \(url.lastPathComponent)（\(pages.count) 页）")
+                        } catch { self.alert("PDF 导出失败", error.localizedDescription) }
+                    }
+                }
+            }
+        }
+    }
 
     /// 导出机理图（SVG/PNG）：包含 Ketcher 内容、孤对与全部箭头；不改文件身份、不清 dirty
     @objc func actExportMechanismImage() {
@@ -2559,8 +3735,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         guard message.name == "k3d" else { return }
         let body = message.body as? [String: Any] ?? [:]
         let act = body["act"] as? String ?? ""
+        if act == "nativeUI" {
+            if let decoded = workspaceBridge?.parseScriptMessage(message) {
+                _ = workspaceCoordinator?.receiveMessage(decoded)
+            }
+            return
+        }
         switch act {
         case "save": actSave()
+        case "saveAs": actSaveAs()
         case "paste": actPaste()
         case "open": actOpen()
         case "new": actNewDocument()
@@ -2579,6 +3762,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             }
         case "exportMechanismImage":
             if let kind = body["kind"] as? String { exportMechanismImage(kind) }
+        case "exportDocumentPDF": actExportDocumentPDF()
         case "clipboardWrite":
             guard let text = body["text"] as? String, !text.isEmpty else {
                 if let requestID = body["requestId"] as? String {
@@ -2761,7 +3945,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
 
     @objc func actRenameFile(_ sender: NSButton) {
         guard sender.tag < fileList.count else { return }
-        let url = fileList[sender.tag]
+        renameRecentFile(at: fileList[sender.tag])
+    }
+
+    private func renameRecentFile(at url: URL) {
         let a = NSAlert()
         a.messageText = "重命名"
         a.informativeText = url.lastPathComponent
@@ -2779,12 +3966,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         if newURL.lastPathComponent != url.lastPathComponent {
             do {
                 try FileManager.default.moveItem(at: url, to: newURL)
+                if let directory = docsDir?.appendingPathComponent("thumbnails", isDirectory: true) {
+                    WelcomeThumbnailCache.copy(from: url, to: newURL, directory: directory, renamed: true)
+                }
                 if currentFile?.standardizedFileURL == url.standardizedFileURL {
                     currentFile = newURL
-                    UserDefaults.standard.set(newURL.path, forKey: "lastFile")
+                    appUserDefaults.set(newURL.path, forKey: "lastFile")
                     updateTitle()
                 }
-                refreshFileList()
+                if let item = welcomeModel?.recentItems.first(where: { $0.id == WelcomeRecents.canonicalPath(for: url) }) {
+                    welcomeModel?.removeRecent(item)
+                }
+                noteRecentDocument(newURL)
                 setStatus("已重命名为 \(name)")
             } catch { alert("重命名失败", error.localizedDescription) }
         }
@@ -2804,7 +3997,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
             if currentFile?.standardizedFileURL == url.standardizedFileURL {
                 currentFile = nil
-                UserDefaults.standard.removeObject(forKey: "lastFile")
+                appUserDefaults.removeObject(forKey: "lastFile")
             }
             refreshFileList()
             setStatus("已删除 \(url.lastPathComponent)")
@@ -2896,26 +4089,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         return fm.fileExists(atPath: dev.path) ? dev : nil
     }
 
+    private func startAcceptanceObserverIfRequested() {
+        let cfg = AppRuntimeConfig.shared
+        guard let controlPath = cfg.acceptanceControlFilePath, !controlPath.isEmpty else { return }
+        let server = AcceptanceTelemetryServer(controlFilePath: controlPath, runtimeConfig: cfg) { [weak self] in
+            self?.buildAcceptanceSnapshot() ?? ["ok": false]
+        }
+        if server.start() {
+            acceptanceTelemetryServer = server
+            dbg("acceptance telemetry started on loopback port \(server.port)")
+        } else {
+            dbg("acceptance telemetry failed to start for control file \(controlPath)")
+        }
+    }
+
+    @MainActor
+    private func buildAcceptanceSnapshot() -> [String: Any] {
+        let cfg = AppRuntimeConfig.shared
+        let coord = workspaceCoordinator
+        let ui = coord?.uiState ?? .disabledInitial()
+        let agent = coord?.agentStore
+        let splitVC = workspaceSplitVC
+        let documentInfo: [String: Any] = [
+            "mode": ui.document?.mode?.rawValue ?? ui.viewport.mode.rawValue,
+            "pageCount": ui.document?.pageCount ?? 0,
+            "size": ui.document?.size ?? "",
+            "orientation": ui.document?.orientation ?? "",
+            "marginMm": ui.document?.marginMm ?? 0,
+            "canRemoveLastPage": ui.document?.canRemoveLastPage ?? false,
+        ]
+        let agentPublic: [String: Any] = [
+            "hasSnapshot": agent?.hasSnapshot ?? false,
+            "configured": agent?.config.configured ?? false,
+            "provider": agent?.config.provider ?? "",
+            "baseUrl": agent?.config.baseUrl ?? "",
+            "model": agent?.config.model ?? "",
+            "generationProfile": agent?.config.generation.profile ?? "",
+            "generationEffort": agent?.config.generation.effort ?? "",
+            "running": agent?.running ?? false,
+            "pendingStart": agent?.pendingStart ?? false,
+            "canContinue": agent?.canContinue ?? false,
+            "statusText": agent?.statusText ?? "",
+            "errorMessage": agent?.errorMessage ?? "",
+            "timelineCount": agent?.timeline.count ?? 0,
+            "usageSummary": agent?.usageSummary ?? "",
+            "checkpointStatus": agent?.checkpoint?.status ?? "",
+            "checkpointPhaseIndex": agent?.checkpoint?.phaseIndex ?? -1,
+            "checkpointPhaseCount": agent?.checkpoint?.phases?.count ?? 0,
+        ]
+        var info: [String: Any] = [
+            "ok": true,
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "bundleId": cfg.bundleIdentifier,
+            "isBundled": kIsBundled,
+            "isIsolated": cfg.isIsolated,
+            "isolationProfile": cfg.isolationProfile ?? "",
+            "port": kPort,
+            "docsDir": cfg.docsDirectoryURL.path,
+            "agentConfigDir": cfg.agentConfigDirectoryURL?.path ?? "",
+            "defaultsSuite": cfg.defaultsSuiteName ?? "",
+            "windowVisible": window?.isVisible ?? false,
+            "welcomeVisible": welcomeWin?.isVisible ?? false,
+            "windowTitle": window?.title ?? "",
+            "windowSubtitle": window?.subtitle ?? "",
+            "pageUsable": pageUsable,
+            "navigationInFlight": navigationInFlight,
+            "currentFile": currentFile?.path ?? "",
+            "dirty": isDirty,
+            "coordinator": [
+                "navigationGeneration": coord?.navigationGeneration ?? 0,
+                "isAttaching": coord?.isAttaching ?? false,
+                "attached": coord?.attachedEpoch != nil,
+                "attachedPageId": coord?.attachedEpoch?.pageId ?? "",
+                "lastSequence": coord?.lastSequence ?? -1,
+                "ownedSurfaces": (coord?.ownedSurfaces.map(\.rawValue).sorted() ?? []),
+                "uiRevision": ui.revision,
+                "readyCanvas": ui.ready.canvas,
+                "readyAgent": ui.ready.agent,
+                "toolId": ui.tool.id as Any,
+                "toolLabel": ui.tool.label,
+                "supportedCommands": ui.supported.commands,
+                "supportedToolIds": ui.supported.toolIds,
+                "selectionKind": ui.selection.kind.rawValue,
+                "selectionCount": ui.selection.count,
+                "canUndo": ui.history.canUndo,
+                "canRedo": ui.history.canRedo,
+                "viewportMode": ui.viewport.mode.rawValue,
+                "viewportPercent": ui.viewport.percent as Any,
+                "viewportCssSize": ["width": ui.viewport.cssSize.width, "height": ui.viewport.cssSize.height],
+                "document": documentInfo,
+                "sidebarCollapsed": splitVC?.isSidebarCollapsed ?? true,
+                "inspectorCollapsed": splitVC?.isInspectorCollapsed ?? true,
+                "inspectorTab": (splitVC?.inspectorViewController.selectedTab == .agent) ? "agent" : "properties",
+                "agent": agentPublic,
+            ],
+        ]
+        if let welcomeCount = welcomeModel?.recentItems.count {
+            info["welcomeRecentCount"] = welcomeCount
+        }
+        return info
+    }
+
     private func dbg(_ msg: String) {
+        let logPath = AppRuntimeConfig.shared.logFilePath
         let line = "[\(Date())] \(msg)\n"
-        if let h = FileHandle(forWritingAtPath: "/tmp/k3d.log") {
+        if let h = FileHandle(forWritingAtPath: logPath) {
             h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile()
         } else {
-            try? line.write(toFile: "/tmp/k3d.log", atomically: true, encoding: .utf8)
+            try? line.write(toFile: logPath, atomically: true, encoding: .utf8)
         }
     }
 }
 
 // MARK: - 启动
-// 单实例守护：已有 MolStudio 在运行就把它调到前台、自己退出（避免双实例抢 8462 端口）。
-// 取证构建另开了端口（MOLSTUDIO_SELFTEST_PORT）时不抢前台，可以和正在用的实例并存。
-#if MOLSTUDIO_SELFTEST
-let selftestIsolatedPort = ProcessInfo.processInfo.environment["MOLSTUDIO_SELFTEST_PORT"] != nil
-#else
-let selftestIsolatedPort = false
-#endif
-if !selftestIsolatedPort {
-    for running in NSRunningApplication.runningApplications(withBundleIdentifier: "local.ketcher3d.native")
+// 单实例守护：正式包已有相同 Bundle ID 在运行就把它调到前台、自己退出（避免双实例抢 8462 端口）。
+// 隔离候选构建与取证构建另开端口与数据目录，不与正在用的实例互相抢占。
+let selftestIsolatedPort = AppRuntimeConfig.shared.selftestIsolatedPort
+if !AppRuntimeConfig.shared.allowMultipleInstances {
+    for running in NSRunningApplication.runningApplications(withBundleIdentifier: AppRuntimeConfig.shared.bundleIdentifier)
     where running != .current {
         running.activate()
         exit(0)
@@ -2940,10 +4231,16 @@ extension AppDelegate {
         let ket = (try? String(contentsOfFile: ketPath, encoding: .utf8)) ?? ""
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-            self.actNewDocument()          // 从欢迎页进入结构画布
+            if action == "document" {
+                self.captureWelcomeSelfTestScreenshot()
+                self.welcomeModel?.paperSetup = WelcomePaperSetup()
+                self.actNewPaperDocument()
+            } else {
+                self.actNewDocument()      // 从欢迎页进入结构画布
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 11) {
-            if !ket.isEmpty {
+            if action != "document" && !ket.isEmpty {
                 self.js("await window.k3dAPI.setMolecule(\(self.jsonLiteral(ket)))")
             }
         }
@@ -2952,6 +4249,8 @@ extension AppDelegate {
             case "layout": self.actClean()
             case "mech": self.runMechanismSelfTest()
             case "clipboard": self.runClipboardSelfTest()
+            case "document": self.runDocumentSelfTest()
+            case "thumbnail-canvas": self.runCanvasThumbnailSelfTest()
             case "gen3d": self.actGen3D()
             case "gen3d-example":
                 self.selfTestAutoExample = true
@@ -2993,6 +4292,183 @@ extension AppDelegate {
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: path))
         }
+    }
+
+    func captureWelcomeSelfTestScreenshot() {
+        guard let path = ProcessInfo.processInfo.environment["MOLSTUDIO_SELFTEST_WELCOME_PNG"],
+              let content = welcomeWin?.contentView, let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return }
+        content.cacheDisplay(in: content.bounds, to: bitmap)
+        if let data = bitmap.representation(using: .png, properties: [:]) { try? data.write(to: URL(fileURLWithPath: path), options: .atomic) }
+    }
+
+    func runCanvasThumbnailSelfTest() {
+        let env = ProcessInfo.processInfo.environment
+        let output = env["MOLSTUDIO_SELFTEST_OUT"] ?? NSTemporaryDirectory() + "molstudio-canvas-thumb-selftest.json"
+        let path = env["MOLSTUDIO_SELFTEST_SAVE"] ?? NSTemporaryDirectory() + "molstudio-canvas-thumb-selftest.molwork"
+        let target = URL(fileURLWithPath: path)
+        var report: [String: Any] = ["application": "MolStudio native canvas", "page": "fusion/canvas.html",
+                                     "build": "MOLSTUDIO_SELFTEST isolated native app", "port": kPort]
+        var done = false
+        func finish(_ error: String? = nil) {
+            guard !done else { return }; done = true
+            report["ok"] = error == nil; report["error"] = error
+            Self.writeSelfTestReport(report, to: output)
+            self.selfTestPreviousApp?.activate(); self.server?.terminate(); exit(error == nil ? 0 : 1)
+        }
+        func waitUntil(_ predicate: @escaping () -> Bool, remaining: Int = 100, completion: @escaping (Bool) -> Void) {
+            if done { return }; if predicate() { return completion(true) }; if remaining <= 0 { return completion(false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { waitUntil(predicate, remaining: remaining - 1, completion: completion) }
+        }
+        guard selftestIsolatedPort, !FileManager.default.fileExists(atPath: target.path),
+              let source = exampleDocumentURL(), let text = try? String(contentsOf: source, encoding: .utf8) else {
+            return finish("Missing isolated port or example, or output already exists")
+        }
+        waitUntil({ self.pageUsable && !self.navigationInFlight && self.canvasSession.initialized }) { ready in
+            guard ready else { return finish("Canvas not ready") }
+            self.jsValue("return JSON.stringify(await window.k3dAPI.loadWorkbench(\(self.jsonLiteral(text))))") { value, ok in
+                guard ok, let json = value as? String, let data = json.data(using: .utf8),
+                      let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any], result["ok"] as? Bool == true else {
+                    return finish("Cannot load F01 fixture")
+                }
+                self.canvasSession.fileURL = target
+                self.saveSession(.canvas, forceSaveAs: false) { saved in
+                    guard saved else { return finish("Native save failed") }
+                    let directory = self.docsDir.appendingPathComponent("thumbnails", isDirectory: true)
+                    waitUntil({ WelcomeThumbnailCache.record(for: target, directory: directory)?.hasThumbnail == true }) { ready in
+                        guard ready else { return finish("Canvas thumbnail was not generated") }
+                        let thumbnail = WelcomeThumbnailCache.paths(for: target, directory: directory).png
+                        let bitmap = WelcomeThumbnailCache.readBounded(thumbnail, limit: WelcomeThumbnailCache.maxPNGBytes).flatMap(NSBitmapImageRep.init(data:))
+                        let recent = WelcomeRecents.merge(recentURLs: [target], directoryURLs: [], thumbnailsDirectoryURL: directory).first
+                        report["thumbnailPath"] = thumbnail.path; report["width"] = bitmap?.pixelsWide; report["height"] = bitmap?.pixelsHigh
+                        guard bitmap?.pixelsWide == 480, (bitmap?.pixelsHigh ?? 0) > 0, recent?.mode == .canvas, recent?.thumbnailURL != nil else {
+                            return finish("Canvas thumbnail dimensions or recent metadata invalid")
+                        }
+                        finish()
+                    }
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 55) { finish("Canvas thumbnail self-test timed out") }
+    }
+
+    /// Native self-test build, isolated service and bundle ID: exercises the real
+    /// welcome action, paper initialization, full snapshot save/open and WK view.
+    func runDocumentSelfTest() {
+        let env = ProcessInfo.processInfo.environment
+        let out = env["MOLSTUDIO_SELFTEST_OUT"] ?? NSTemporaryDirectory() + "molstudio-document-selftest.json"
+        let savePath = env["MOLSTUDIO_SELFTEST_SAVE"] ?? NSTemporaryDirectory() + "molstudio-document-selftest.molwork"
+        let target = URL(fileURLWithPath: savePath)
+        var report: [String: Any] = ["application": "MolStudio native canvas", "page": "fusion/canvas.html",
+            "build": "MOLSTUDIO_SELFTEST isolated native app", "port": kPort, "savePath": savePath, "checks": [String: Bool]()]
+        var checks: [String: Bool] = [:], finished = false
+        func finish(_ error: String? = nil) {
+            guard !finished else { return }; finished = true
+            report["checks"] = checks; report["error"] = error
+            report["ok"] = error == nil && checks.values.allSatisfy { $0 }
+            Self.writeSelfTestReport(report, to: out)
+            self.selfTestPreviousApp?.activate(); self.server?.terminate()
+            exit((report["ok"] as? Bool) == true ? 0 : 1)
+        }
+        func waitUntil(_ predicate: @escaping () -> Bool, remaining: Int = 150, done: @escaping (Bool) -> Void) {
+            guard !finished else { return }
+            if predicate() { return done(true) }
+            if remaining <= 0 { return done(false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { waitUntil(predicate, remaining: remaining - 1, done: done) }
+        }
+        guard selftestIsolatedPort else { return finish("Self-test requires a separate MOLSTUDIO_SELFTEST_PORT") }
+        guard !FileManager.default.fileExists(atPath: target.path) else { return finish("Self-test target already exists; refusing to overwrite it") }
+        guard let example = exampleDocumentURL(), let seed = try? String(contentsOf: example, encoding: .utf8) else { return finish("F01 example unavailable") }
+        if let welcome = env["MOLSTUDIO_SELFTEST_WELCOME_PNG"] { checks["welcomeScreenshot"] = FileManager.default.fileExists(atPath: welcome) }
+        waitUntil({ self.pageUsable && !self.navigationInFlight && self.canvasSession.initialized }) { ready in
+            guard ready else { return finish("New paper navigation timed out") }
+            checks["newPaperClean"] = !self.canvasSession.dirty && self.canvasSession.fileURL == nil
+            let script = """
+            const state = window.k3dAPI.document.getState();
+            if (state.mode !== 'paper' || state.page.size !== 'A4' || state.page.orientation !== 'portrait') throw new Error('paper setup mismatch');
+            const fixture = JSON.parse(\(self.jsonLiteral(seed))); fixture.version = 2; fixture.document = state;
+            const loaded = await window.k3dAPI.loadWorkbench(JSON.stringify(fixture));
+            if (!loaded.ok) throw new Error(loaded.error || 'fixture load failed');
+            const a = window.MolWorkbench.app.adapter, atoms = [...a.struct().atoms.values()];
+            if (atoms.length) {
+              const x = Math.min(...atoms.map(atom => atom.pp.x)), y = Math.min(...atoms.map(atom => atom.pp.y));
+              for (const atom of atoms) { atom.pp.x += 5 - x; atom.pp.y += 12 - y; }
+              a.ed.update(true);
+            }
+            const text = window.k3dAPI.document.addText({x:4,y:5,w:20,h:2,text:'中文纸页 原生验收'});
+            const shape = window.k3dAPI.document.addShape({x:24,y:10,w:5,h:3,shape:'rect',fill:'#ffffff'});
+            const image = await window.k3dAPI.document.addImage({x:24,y:16,w:3,h:3,dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGO4o6EBRAwQCgAjrgSxn17XlQAAAABJRU5ErkJggg=='});
+            return { text, shape, image, atoms:atoms.length, arrows:window.MolWorkbench.app.model.state.arrows.length,
+                     lonePairs:window.MolWorkbench.app.model.state.lonePairs.length };
+            """
+            self.jsValue(script) { value, ok in
+                guard ok, let seeded = value as? [String: Any], let textID = seeded["text"] as? String else { return finish("Cannot seed paper fixture") }
+                report["seeded"] = seeded
+                checks["fixtureHasChemistry"] = (seeded["atoms"] as? Int ?? 0) > 0 && (seeded["arrows"] as? Int ?? 0) > 0 && (seeded["lonePairs"] as? Int ?? 0) > 0
+                self.canvasSession.fileURL = target
+                self.saveSession(.canvas, forceSaveAs: false) { saved in
+                    checks["nativeSave"] = saved && FileManager.default.fileExists(atPath: target.path)
+                    guard saved else { return finish("Native save failed") }
+                    let directory = self.docsDir.appendingPathComponent("thumbnails", isDirectory: true)
+                    waitUntil({ WelcomeThumbnailCache.record(for: target, directory: directory)?.hasThumbnail == true }, remaining: 100) { thumbReady in
+                        guard thumbReady else { return finish("Saved document thumbnail was not generated") }
+                        let thumb = WelcomeThumbnailCache.paths(for: target, directory: directory).png
+                        let bitmap = WelcomeThumbnailCache.readBounded(thumb, limit: WelcomeThumbnailCache.maxPNGBytes).flatMap(NSBitmapImageRep.init(data:))
+                        checks["thumbnailDimensions"] = bitmap?.pixelsWide == 480 && (bitmap?.pixelsHigh ?? 0) > 0
+                        let recents = WelcomeRecents.merge(recentURLs: [target], directoryURLs: [], thumbnailsDirectoryURL: directory)
+                        checks["externalRecentMerge"] = !target.path.hasPrefix(self.docsDir.standardizedFileURL.path + "/") &&
+                            recents.first?.id == WelcomeRecents.canonicalPath(for: target) && recents.first?.mode == .paper && recents.first?.thumbnailURL != nil
+                        report["thumbnailPath"] = thumb.path
+                        let generation = self.navigationGeneration
+                        self.openDocument(at: target)
+                        waitUntil({ self.navigationGeneration > generation && !self.navigationInFlight && self.pageUsable && self.canvasSession.fileURL == target }) { reopened in
+                        guard reopened else { return finish("Native reopen timed out") }
+                        checks["reopenedClean"] = !self.canvasSession.dirty
+                        let verify = """
+                        const state = window.k3dAPI.document.getState(), model = window.MolWorkbench.app.model.state;
+                        const text = state.objects.find(o => o.id === \(self.jsonLiteral(textID)));
+                        if (!text) throw new Error('text object missing after reopen');
+                        window.k3dAPI.document.updateObject(text.id, {rich:{...text.rich,text:text.rich.text+'!'}});
+                        const edited = window.k3dAPI.document.getState().objects.find(o => o.id === text.id).rich.text.endsWith('!');
+                        return {mode:state.mode, objects:state.objects.map(o=>o.kind), text:text.rich.text,
+                                atoms:window.MolWorkbench.app.adapter.struct().atoms.size,
+                                arrows:model.arrows.length,lonePairs:model.lonePairs.length,editable:edited};
+                        """
+                        self.jsValue(verify) { result, ok in
+                            guard ok, let result = result as? [String: Any] else { return finish("Cannot verify reopened document") }
+                            report["reopened"] = result
+                            let kinds = result["objects"] as? [String] ?? []
+                            checks["editableRoundTrip"] = result["mode"] as? String == "paper" && result["editable"] as? Bool == true &&
+                                kinds.contains("text") && kinds.contains("shape") && kinds.contains("image") &&
+                                (result["atoms"] as? Int ?? 0) > 0 && (result["arrows"] as? Int ?? 0) > 0 && (result["lonePairs"] as? Int ?? 0) > 0
+                            func captureCanvas() {
+                                guard let screenshot = env["MOLSTUDIO_SELFTEST_CANVAS_PNG"] else { return finish() }
+                                let config = WKSnapshotConfiguration()
+                                self.web.takeSnapshot(with: config) { image, error in
+                                    guard error == nil, let image, let tiff = image.tiffRepresentation,
+                                          let bitmap = NSBitmapImageRep(data: tiff), let bytes = bitmap.representation(using: .png, properties: [:]) else {
+                                        return finish("WK canvas screenshot failed")
+                                    }
+                                    do { try bytes.write(to: URL(fileURLWithPath: screenshot), options: .atomic); checks["canvasScreenshot"] = true; finish() }
+                                    catch { finish("Cannot write WK canvas screenshot: \(error.localizedDescription)") }
+                                }
+                            }
+                            guard let pagesPath = env["MOLSTUDIO_SELFTEST_PAGES_JSON"] else { return captureCanvas() }
+                            self.jsValue("return JSON.stringify(await window.k3dAPI.document.exportPages())") { value, ok in
+                                guard ok, let json = value as? String, let data = json.data(using: .utf8),
+                                      let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                                      payload["ok"] as? Bool == true, let pages = payload["pages"] as? [[String: Any]], !pages.isEmpty else {
+                                    return finish("Cannot export reopened canvas pages")
+                                }
+                                do { try data.write(to: URL(fileURLWithPath: pagesPath), options: .atomic); checks["canvasPagesJSON"] = true; captureCanvas() }
+                                catch { finish("Cannot write canvas pages JSON: \(error.localizedDescription)") }
+                            }
+                        }
+                        }
+                    }
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 70) { finish("Document self-test timed out") }
     }
 
     /// 机理层原生取证：真实 WKWebView 里画两根箭头 → 走原生保存链路写 .molwork →
@@ -3149,6 +4625,9 @@ extension AppDelegate {
                                             windowNumber: win.windowNumber, context: nil,
                                             characters: chars, charactersIgnoringModifiers: ch,
                                             isARepeat: false, keyCode: keyCode) else { continue }
+            if type == .keyDown, !win.isKeyWindow, let menu = NSApp.mainMenu, menu.performKeyEquivalent(with: ev) {
+                continue
+            }
             NSApp.sendEvent(ev)
         }
     }
@@ -3256,13 +4735,19 @@ extension AppDelegate {
 
         // 3) 真实 ⌘C
         func copyStep() {
+            self.window?.deminiaturize(nil)
             sendCommandKey("c", 8)
             later(0.8) {
                 let pb = self.readMechanismClipboard() ?? ""
+                let plainPb = NSPasteboard.general.string(forType: .string) ?? ""
+                let pbTypes = (NSPasteboard.general.types ?? []).map { $0.rawValue }
                 report["copyBytes"] = pb.count
+                report["copyPlainBytes"] = plainPb.count
+                report["copyTypes"] = pbTypes
                 report["copyHasPayload"] = !pb.isEmpty
-                // 网页粘贴只能看到 text/plain：必须同时有一份纯文本，否则 ⌘V 落回 paste 事件时什么都拿不到
-                report["copyPlainTextMatches"] = !pb.isEmpty && (NSPasteboard.general.string(forType: .string) == pb)
+                // 机理复制只写原生自定义剪贴板类型 local.molstudio.mechanism，绝不能把 JSON 泄漏到 .string
+                report["copyPlainLeaked"] = !plainPb.isEmpty
+                report["copyTypesOnlyMechanism"] = !pb.isEmpty && plainPb.isEmpty && pbTypes == [Self.mechPasteboardType.rawValue]
                 if let d = pb.data(using: .utf8),
                    let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                    let arrows = obj["arrows"] as? [[String: Any]],
@@ -3290,35 +4775,50 @@ extension AppDelegate {
             }
         }
 
-        // 4) 真实 ⌘V
+        // 4) 真实 ⌘V（进入交互预览后点击落位，再验证坐标/选择/历史）
         func pasteStep() {
             sendCommandKey("v", 9)
-            later(1.8) {
-                self.jsValue(collectJS) { v, ok in
-                    let text = (ok ? v as? String : nil) ?? "{}"
-                    report["afterPaste"] = text
-                    if let d = text.data(using: .utf8),
-                       let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-                       let last = obj["last"] as? [String: Any],
-                       let s = last["s"] as? [String: Any],
-                       let t = last["t"] as? [String: Any],
-                       let counts = obj["counts"] as? [String: Any] {
-                        let arrows = (counts["arrows"] as? NSNumber)?.intValue ?? -1
-                        let start = geo["start"] as? [String: Any] ?? [:]
-                        let end = geo["end"] as? [String: Any] ?? [:]
-                        let dx1 = num(s["x"]) - num(start["x"]), dy1 = num(s["y"]) - num(start["y"])
-                        let dx2 = num(t["x"]) - num(end["x"]), dy2 = num(t["y"]) - num(end["y"])
-                        let chordP = hypot(num(t["x"]) - num(s["x"]), num(t["y"]) - num(s["y"]))
-                        let chordO = hypot(num(end["x"]) - num(start["x"]), num(end["y"]) - num(start["y"]))
-                        report["pasteArrows"] = arrows
-                        report["pasteFreeEnds"] = (s["type"] as? String) == "free" && (t["type"] as? String) == "free"
-                        report["pasteOffsetSame"] = abs(dx1 - dx2) < 1e-6 && abs(dy1 - dy2) < 1e-6 && hypot(dx1, dy1) > 0.5
-                        report["pasteChordSame"] = abs(chordP - chordO) < 1e-6
-                        report["pasteBend"] = last["bend"]
-                        report["pasteElectrons"] = last["e"]
-                        report["pasteSelection"] = obj["selection"]
+            later(0.8) {
+                let placeJS = """
+                (() => {
+                  const c = window.MolWorkbench && window.MolWorkbench.app && window.MolWorkbench.app.controller;
+                  if (!c || !c.pastePreview) return JSON.stringify({ preview: false });
+                  const a = c.pastePreview.anchor || { x: 0, y: 0 };
+                  const placed = !!c.finishPastePreview({ x: a.x + 2.0, y: a.y + 1.5 });
+                  return JSON.stringify({ preview: true, placed });
+                })()
+                """
+                self.jsValue("return \(placeJS)") { placeVal, _ in
+                    let placeText = (placeVal as? String) ?? "{}"
+                    report["pastePlacement"] = placeText
+                    later(0.8) {
+                        self.jsValue(collectJS) { v, ok in
+                            let text = (ok ? v as? String : nil) ?? "{}"
+                            report["afterPaste"] = text
+                            if let d = text.data(using: .utf8),
+                               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                               let last = obj["last"] as? [String: Any],
+                               let s = last["s"] as? [String: Any],
+                               let t = last["t"] as? [String: Any],
+                               let counts = obj["counts"] as? [String: Any] {
+                                let arrows = (counts["arrows"] as? NSNumber)?.intValue ?? -1
+                                let start = geo["start"] as? [String: Any] ?? [:]
+                                let end = geo["end"] as? [String: Any] ?? [:]
+                                let dx1 = num(s["x"]) - num(start["x"]), dy1 = num(s["y"]) - num(start["y"])
+                                let dx2 = num(t["x"]) - num(end["x"]), dy2 = num(t["y"]) - num(end["y"])
+                                let chordP = hypot(num(t["x"]) - num(s["x"]), num(t["y"]) - num(s["y"]))
+                                let chordO = hypot(num(end["x"]) - num(start["x"]), num(end["y"]) - num(start["y"]))
+                                report["pasteArrows"] = arrows
+                                report["pasteFreeEnds"] = (s["type"] as? String) == "free" && (t["type"] as? String) == "free"
+                                report["pasteOffsetSame"] = abs(dx1 - dx2) < 1e-6 && abs(dy1 - dy2) < 1e-6 && hypot(dx1, dy1) > 0.5
+                                report["pasteChordSame"] = abs(chordP - chordO) < 1e-6
+                                report["pasteBend"] = last["bend"]
+                                report["pasteElectrons"] = last["e"]
+                                report["pasteSelection"] = obj["selection"]
+                            }
+                            later(0.2) { undoStep() }
+                        }
                     }
-                    later(0.2) { undoStep() }
                 }
             }
         }

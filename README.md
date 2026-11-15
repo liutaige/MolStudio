@@ -1,6 +1,6 @@
 # MolStudio 画布
 
-当前画布把分子结构、孤对电子、机理箭头和 AI 编辑放在同一界面中，并提供独立的 3D 预览窗口。
+当前画布把分子结构、孤对电子、机理箭头和 AI 编辑放在同一界面中，并提供独立的 3D 预览窗口。纸页模式在同一画布上直接编辑机理，与文字、图片和形状混排；支持 A4 / Letter 与按页 PDF。
 
 ## 从这里开始
 
@@ -8,6 +8,7 @@
 - [AI 助手与真实模型验收](fusion/agent/README.md)
 - [macOS 原生应用打包](fusion-native/PACKAGING.md)
 - [无机小分子 3D 支持范围](fusion/INORGANIC_3D.md)
+- [纸页模式与欢迎页设计](fusion/DOCUMENT_MODE.md) · [实现范围与分构建验收](fusion/DOCUMENT_MODE_RESULTS.md)
 
 首次使用先按[开发说明](fusion/README.md)准备 Python 与 Node 依赖，并生成 AI 浏览器资源。已有开发环境可直接启动：
 

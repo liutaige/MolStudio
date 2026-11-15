@@ -26,6 +26,7 @@ function fixture() {
   };
   const adapter = { ed, context: () => ({}), clientToModel: point => ({ x: point.x, y: point.y }),
     selection: () => ({ atoms: nativeSelection?.atoms || [], bonds: nativeSelection?.bonds || [], others: 0 }),
+    struct: () => ({}),
     clearSelection() { nativeSelection = null; }, clearHover() {},
     pushAction(undo, redo) { history.push(new NativeAction(undo, redo)); ed.historyPtr = history.length; },
     k: { getKet() { throw Error('must use native serializer'); }, addFragment() { throw Error('must use native paste'); } }
@@ -153,7 +154,7 @@ async function test(name, fn) { await fn(); console.log('PASS', name); }
   await test('mixed paste stages a sidecar and leaves native event and pointer placement untouched', () => {
     const f = fixture(), ar = arrow(1), paste = { ...event(), clipboardData: { getData: type => type === MIME ? payload([ar]) : 'native molfile' } };
     f.controller.tool = 'arrow2'; f.controller.onPasteEvent(paste);
-    assert.equal(paste.defaultPrevented, false); assert.equal(f.controller.tool, 'select'); assert.equal(f.toolChanges(), 0);
+    assert.equal(paste.defaultPrevented, false); assert.equal(f.controller.tool, 'select'); assert.equal(f.toolChanges(), 1, 'retire an older native preview before capturing destination pools');
     const token = f.controller.nativePasteToken(); assert.ok(token); assert.equal(f.model.state.arrows.length, 0);
     f.controller.startNativePaste({ token, offset: { x: 10, y: 20 }, scale: 1, rotation: 0 });
     f.controller.hitHandle = () => { throw Error('native placement must own this pointer'); };

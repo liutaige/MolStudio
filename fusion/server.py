@@ -657,7 +657,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send_file(os.path.join(FUSION_DIR, path.lstrip("/")))
         if path.startswith("/agent/"):
             # Serve only browser assets; source dependencies and package files stay private.
-            if path not in ("/agent/panel.js", "/agent/panel.css", "/agent/app.js", "/agent/dist/agent-runtime.js"):
+            if path not in ("/agent/panel.js", "/agent/panel.css", "/agent/app.js", "/agent/native-renderer.js", "/agent/dist/agent-runtime.js"):
                 return self._send(404, b"not found", "text/plain; charset=utf-8")
             return self._send_file(os.path.join(FUSION_DIR, path.lstrip("/")))
         if path.startswith("/ketcher/"):

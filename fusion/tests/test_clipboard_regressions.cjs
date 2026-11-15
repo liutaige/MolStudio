@@ -131,4 +131,65 @@ async function test(name, fn) {await fn(); console.log('PASS',name);}
   const f=fixture(),data=JSON.parse(payload());data.arrows={};assert.equal(await f.c.pasteText(JSON.stringify(data)),false);
   assert.equal(f.atoms.size,2);assert.equal(f.ed.historyStack.length,0);
  });
+ await test('native WKWebView bridge routes pure mechanism copy via clipboardWrite without text/plain JSON leak, while keeping mixed copy sidecar intact',async()=>{
+  const f=fixture(), ar=M.makeArrow({type:'free',x:0,y:0},{type:'free',x:1,y:0},{bend:.25});
+  f.model.addArrow(ar); f.c.selection.add(ar.id);
+  const posted=[];
+  const origWebkit=global.webkit;
+  global.webkit={messageHandlers:{k3d:{postMessage(msg){posted.push(msg);}}}};
+  try {
+    // 1. Pure mechanism copy in WKWebView must NOT touch e.clipboardData('text/plain')
+    const dataSet=[]; let prevented=false, stopped=false;
+    const handled=f.c.onCopyEvent({
+      target:{tagName:'DIV'},
+      clipboardData:{setData(k,v){dataSet.push([k,v]);}},
+      preventDefault(){prevented=true;},
+      stopPropagation(){stopped=true;}
+    },false);
+    assert.equal(handled,true); assert.equal(prevented,true); assert.equal(stopped,true);
+    assert.deepEqual(dataSet,[],'native WKWebView pure mechanism copy must not write text/plain or CLIP_MIME via DOM clipboardData');
+    assert.equal(posted.length,1); assert.equal(posted[0].act,'clipboardWrite');
+    const decoded=JSON.parse(posted[0].text); assert.equal(decoded.kind,'molstudio-mechanism'); assert.equal(decoded.arrows.length,1);
+    assert.equal(f.c.clipboardWriteResult(posted[0].requestId,true),true);
+    await new Promise(r=>setTimeout(r,0));
+    assert.equal(f.model.state.arrows.length,1);
+
+    // 2. Pure mechanism cut deletes only after native host confirms clipboardWriteResult(..., true)
+    let cutPrevented=false;
+    const cutDataSet=[];
+    const cutHandled=f.c.onCopyEvent({
+      target:{tagName:'DIV'},
+      clipboardData:{setData(k,v){cutDataSet.push([k,v]);}},
+      preventDefault(){cutPrevented=true;},
+      stopPropagation(){}
+    },true);
+    assert.equal(cutHandled,true); assert.equal(cutPrevented,true); assert.deepEqual(cutDataSet,[]);
+    assert.equal(posted.length,2); assert.equal(f.model.state.arrows.length,1,'cut waits for host confirmation');
+    assert.equal(f.c.clipboardWriteResult(posted[1].requestId,true),true);
+    await new Promise(r=>setTimeout(r,0));
+    assert.equal(f.model.state.arrows.length,0,'cut removes arrow once host confirms clipboardWrite');
+
+    // Undo cut, then test 3. Mixed native + mechanism copy still sets CLIP_MIME sidecar without calling clipboardWrite
+    f.ed.historyStack.at(-1).perform({});
+    const ar2=f.model.state.arrows[0]; f.c.selection.clear(); f.c.selection.add(ar2.id);
+    f.adapter.selection=()=>({atoms:[0],bonds:[]});
+    f.adapter.k.getKet=()=>JSON.stringify({root:{nodes:[{$ref:'mol0'}]},mol0:{atoms:[{location:[0,0]}],bonds:[]}});
+    const mixedSet=[]; let mixedPrevented=false;
+    const mixedHandled=f.c.onCopyEvent({
+      target:{tagName:'DIV'},
+      clipboardData:{setData(k,v){mixedSet.push([k,v]);}},
+      preventDefault(){mixedPrevented=true;},
+      stopPropagation(){}
+    },false);
+    assert.equal(mixedHandled,true,'mixed copy attaches CLIP_MIME sidecar without calling preventDefault');
+    assert.equal(mixedPrevented,false);
+    assert.equal(posted.length,2,'mixed copy must not clobber native copy via clipboardWrite');
+    assert.equal(mixedSet.length,1);
+    assert.equal(mixedSet[0][0],'application/x-molstudio-mechanism');
+    assert.equal(JSON.parse(mixedSet[0][1]).native,true);
+  } finally {
+    if (origWebkit === undefined) delete global.webkit;
+    else global.webkit = origWebkit;
+  }
+ });
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -43,7 +43,7 @@
       this.activeAtoms = null;              // 上次同步时的活跃运行时原子集合
       this.activeBonds = null;              // 上次同步时的活跃运行时键集合
       this.bondEndpoints = new Map();       // 运行时键 id → 端点原子稳定ID对 (u1--u2)
-      this.pending = { struct: false, transform: false, history: false };
+      this.pending = { struct: false, transform: false, viewport: false, history: false };
       this.rafId = 0;
       this.disposers = [];
       this.layerEl = null;
@@ -51,6 +51,7 @@
       this._svg = null;
       this._svgObserver = null;
       this._lastGeom = '';
+      this._lastCamera = null;
     }
 
     /* ---------------- 基础读取 ---------------- */
@@ -61,6 +62,15 @@
     zoom() {
       const z = typeof this.ed.zoom === 'function' ? this.ed.zoom() : 1;
       return M.finite(z) && z > 0 ? z : 1;
+    }
+
+    isHandTool() {
+      const tool = typeof this.ed.tool === 'function' ? this.ed.tool() : null;
+      // Ketcher 3.18's HandTool owns these drag endpoints and this leave hook.
+      // Use its live instance rather than minified constructor names or toolbar
+      // selection: the same instance contract covers temporary hand gestures.
+      return !!tool && Object.prototype.hasOwnProperty.call(tool, 'begPos') &&
+        Object.prototype.hasOwnProperty.call(tool, 'endPos') && typeof tool.mouseLeaveClientArea === 'function';
     }
 
     canvasSvg() {
@@ -807,8 +817,30 @@
       }
     }
 
+    /* A viewBox notification is only a pan when the camera scale, canvas and
+     * model transform are unchanged. Resize/style/scroll notifications remain
+     * general transforms even when their viewBox happens to have the same size.
+     * Attribute reads avoid forcing a layout while a trackpad gesture is active. */
+    cameraState() {
+      const svg = this.canvasSvg();
+      const text = svg && svg.getAttribute('viewBox');
+      const values = text && text.trim().split(/[\s,]+/).map(Number);
+      if (!values || values.length !== 4 || values.some(v => !Number.isFinite(v)) || values[2] <= 0 || values[3] <= 0) return null;
+      const offset = this.offset();
+      return { svg, minX: values[0], minY: values[1], width: values[2], height: values[3],
+        zoom: this.zoom(), bondLength: this.bondLength(), offsetX: offset.x, offsetY: offset.y,
+        svgWidth: svg.getAttribute('width'), svgHeight: svg.getAttribute('height') };
+    }
+
+    isCameraPan(before, after) {
+      if (!before || !after || (before.minX === after.minX && before.minY === after.minY)) return false;
+      return ['svg', 'width', 'height', 'zoom', 'bondLength', 'offsetX', 'offsetY', 'svgWidth', 'svgHeight']
+        .every(key => before[key] === after[key]);
+    }
+
     schedule(kind) {
       if (kind === 'transform') this.pending.transform = true;
+      else if (kind === 'viewport') this.pending.viewport = true;
       else if (kind === 'history') this.pending.history = true;
       else this.pending.struct = true;
       if (this.rafId) return;
@@ -820,8 +852,10 @@
         this.rafId = 0;
         if (this._fallback) { clearTimeout(this._fallback); this._fallback = 0; }
         const p = this.pending;
-        this.pending = { struct: false, transform: false, history: false };
-        const which = p.struct ? 'struct' : (p.transform ? 'transform' : 'history');
+        this.pending = { struct: false, transform: false, viewport: false, history: false };
+        const camera = this.cameraState();
+        let which = p.struct ? 'struct' : p.history ? 'history' :
+          (!p.transform && p.viewport && this.isCameraPan(this._lastCamera, camera) ? 'pan' : 'transform');
         // 用历史栈深度判断这次变化是不是撤销/重做：比"包 undo/redo"更可靠
         //（菜单、快捷键、脚本调用最后都改这两个计数）
         try {
@@ -829,12 +863,14 @@
           if (h && this._lastHistory) {
             if (h.undo < this._lastHistory.undo) this.pendingHistory = 'undo';
             else if (h.undo > this._lastHistory.undo && h.redo < this._lastHistory.redo) this.pendingHistory = 'redo';
+            if (which !== 'struct' && (h.undo !== this._lastHistory.undo || h.redo !== this._lastHistory.redo)) which = 'history';
           }
           if (h) this._lastHistory = { undo: h.undo, redo: h.redo };
         } catch (e) { /* 没有历史接口就退回包装信号 */ }
-        this.syncIdentity();
+        if (which === 'struct' || which === 'history') this.syncIdentity();
         this.pendingHistory = null;
-        this.ensureLayer();
+        this._lastCamera = camera;
+        if (which !== 'pan') this.ensureLayer();
         this.notify(which);
       };
       const raf = win && win.requestAnimationFrame ? win.requestAnimationFrame.bind(win) : null;
@@ -933,7 +969,8 @@
         } catch (e) { /* 只读属性：忽略 */ }
       }
 
-      // 3) 画布 svg：viewBox/尺寸变化 = 缩放或 resize；childList 变化 = 重绘/重建
+      // 3) viewBox 单独判定纯平移；尺寸/style 变化仍刷新屏幕几何。
+      //    childList 变化 = 重绘/重建。
       const attachSvg = () => {
         const svg = this.canvasSvg();
         if (!svg || svg === this._svg) return;
@@ -945,7 +982,7 @@
           this._svgObserver = new Obs((records) => {
             let structural = false;
             for (const r of records) {
-              if (r.type === 'attributes') { self.schedule('transform'); continue; }
+              if (r.type === 'attributes') { self.schedule(r.attributeName === 'viewBox' ? 'viewport' : 'transform'); continue; }
               if (r.type !== 'childList') continue;
               if (!self.layerEl || !self.layerEl.isConnected) { structural = true; continue; }
               const t = r.target;

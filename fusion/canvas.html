@@ -29,9 +29,60 @@
   #helpBtn:hover { background: #f2f7fa; border-color: #0a7ea4; color: #0a7ea4; }
   #helpBtn:focus-visible { outline: 2px solid #0a7ea4; outline-offset: 2px; }
 </style>
+<script>
+/* 原生宿主从首帧进入「画布模式」：URL 查询标记在文档解析阶段就生效，
+ * 不依赖 bridge 握手、不依赖异步 CSS 注入。浏览器独立打开（无标记）行为完全不变。
+ * 所有规则带 !important：native-ui-bridge 的 hide/restoreWebSurfaces 内联样式
+ * 无法覆盖，因此 detach / 接管失败 / 迟到回调都不会重新露出旧网页界面。 */
+(function () {
+  if (new URLSearchParams(location.search).get('nativeCanvas') !== '1') return;
+  var d = document.documentElement;
+  d.setAttribute('data-native-canvas', '1');
+  window.__molstudioNativeCanvas = true;
+  window.MolStudioNativeCanvas = Object.freeze({
+    active: true,
+    // 导航代次：原生宿主用 URL 里的 navGen 标记每一次 load，页面内可供
+    // 迟到回调/旧接管状态自检；不参与任何文档、历史或 AI 状态。
+    navigationGeneration: Number(new URLSearchParams(location.search).get('navGen')) || 0
+  });
+  var css = document.createElement('style');
+  css.id = 'molstudio-native-canvas-css';
+  css.textContent = [
+    'html[data-native-canvas="1"] #helpBtn,',
+    'html[data-native-canvas="1"] #toast,',
+    'html[data-native-canvas="1"] #mech-sel-bar,',
+    'html[data-native-canvas="1"] #molstudio-document-toolbar,',
+    'html[data-native-canvas="1"] #molstudio-document-panel,',
+    'html[data-native-canvas="1"] #molstudio-document-status,',
+    'html[data-native-canvas="1"] #molstudio-document-pages,',
+    'html[data-native-canvas="1"] [data-document-ui],',
+    'html[data-native-canvas="1"] [data-doc-pages-preview],',
+    'html[data-native-canvas="1"] .mol-agent-panel,',
+    'html[data-native-canvas="1"] .mol-agent-toggle',
+    '{ display: none !important; visibility: hidden !important; pointer-events: none !important; }',
+    'html[data-native-canvas="1"] #k { width: 100% !important; height: 100% !important; }',
+    'html[data-native-canvas="1"] body { --mol-agent-panel-width: 0px !important; }',
+    'html[data-native-canvas="1"] body.mol-agent-open #k { width: 100% !important; }'
+  ].join('\n');
+  document.head.appendChild(css);
+})();
+</script>
 </head>
 <body>
-<iframe id="k" src="/ketcher/index.html"></iframe>
+<iframe id="k"></iframe>
+<script>
+/* 原生宿主从首帧进入画布模式。Ketcher iframe 保持原始 URL：
+ * 引擎的 hiddenControls 全隐藏会破坏其默认工具选中状态（实测会抛
+ * "Cannot read properties of undefined (reading 'title')" 并让实例不可用），
+ * 因此这里不使用它。视觉隐藏由 WKWebView 的 atDocumentStart 用户样式
+ * （main.swift makeWindow，forMainFrameOnly:false）在 iframe 文档创建的第一帧
+ * 注入，Ketcher 内部工具定义与撤销/绘图内核保持完整。
+ * 浏览器独立打开（无 nativeCanvas 标记）不加载该用户样式，行为完全不变。
+ * iframe 无 src 起步，脚本同步赋值后才开始导航，监听不会漏掉 load。 */
+(function () {
+  document.getElementById('k').src = '/ketcher/index.html';
+})();
+</script>
 <div id="toast"></div>
 <button id="helpBtn" type="button" title="打开帮助" aria-label="打开帮助">
   <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -43,6 +94,16 @@
   <span>帮助</span>
 </button>
 <script src="workbench/canvas-viewport.js"></script>
+<script src="workbench/native-canvas-mode.js"></script>
+<script>
+/* Mirror the native WKUserScript in this top-level document: on iframe load
+ * (before Ketcher's React tree is interactive) the same first-frame rules are
+ * applied to the Ketcher document. WKWebView additionally injects them at
+ * atDocumentStart, so the real app never paints a toolbar frame at all. */
+if (window.MolStudioNativeCanvasMode && window.MolStudioNativeCanvasMode.isNative()) {
+  window.MolStudioNativeCanvasMode.install(document.getElementById('k'));
+}
+</script>
 <script>
 const kd = document.getElementById('k');
 
@@ -56,6 +117,8 @@ function applyPan() {
 function ketcher() { try { return kd.contentWindow.ketcher; } catch (e) { return null; } }
 function editor() { const k = ketcher(); return k ? k.editor : null; }
 const viewport = MolCanvasViewport.create(kd, editor);
+// Shared with native-ui-bridge / agent-bridge: one effective-region authority.
+window.molCanvasViewport = viewport;
 function bridge() {
   return (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.k3d)
     ? window.webkit.messageHandlers.k3d : null;
@@ -87,7 +150,7 @@ function coordKey(x, y) {
 
 /* 机理层（workbench/）选中的对象数：由 main.js 的控制器写入。
    只选中箭头/孤对时，整理与 3D 必须提示"请选择分子"，不能当成空选区操作整张画布。 */
-function mechSelectionCount() { return typeof window.__mechSelectionCount === 'number' ? window.__mechSelectionCount : 0; }
+function mechSelectionCount() { return (window.__mechSelectionCount || 0) + (window.__documentSelectionCount || 0); }
 
 /* 文档身份：KET 文本的稳定指纹，用于异步结果失效检查 */
 function identityOf(text) {
@@ -528,12 +591,13 @@ async function stereoTargets() {
 kd.addEventListener('load', () => {
   // 拦截 Ketcher 内建的 ⌘S / ⌘O / ⌘N（交给原生菜单），以及 Layout(⌘L)、Clean Up(⌘⇧L)
   kd.contentDocument.addEventListener('keydown', e => {
-    if (!e.metaKey) return;
+    if (!e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === 's' || k === 'o' || k === 'n') {
+      if (e.shiftKey && k !== 's') return;
       e.preventDefault();
       e.stopPropagation();
-      notifyNative({ act: k === 's' ? 'save' : (k === 'o' ? 'open' : 'new') });
+      notifyNative({ act: k === 's' ? (e.shiftKey ? 'saveAs' : 'save') : (k === 'o' ? 'open' : 'new') });
       return;
     }
     if (k === 'l') {
@@ -666,13 +730,21 @@ window.k3dAPI = {
 <!-- 机理层（孤对 / 弯箭头 / 鱼钩）。按固定顺序加载，无需构建系统；全部随包离线可用。 -->
 <script src="workbench/mechanism-model.js"></script>
 <script src="workbench/mechanism-route.js"></script>
+<script src="workbench/document-model.js"></script>
 <script src="workbench/workbench-storage.js"></script>
+<script src="workbench/reaction-step-clipboard.js"></script>
 <script src="workbench/ketcher-adapter.js"></script>
 <script src="workbench/mechanism-layer.js"></script>
 <script src="workbench/mechanism-controller.js"></script>
 <script src="workbench/mechanism-ui.js"></script>
 <script src="workbench/mechanism-export.js"></script>
 <script>window.MolWorkbenchOptions = { automaticReadingZoom: 1 };</script>
+<script src="workbench/document-clipboard.js"></script>
+<script src="workbench/document-controller.js"></script>
+<script src="workbench/document-pages-ui.js"></script>
+<script src="workbench/document-ui.js"></script>
+<script src="workbench/native-ui-bridge.js"></script>
+<script src="agent/native-renderer.js"></script>
 <script src="workbench/main.js"></script>
 <script src="workbench/reaction-graph-layout.js"></script>
 <script src="workbench/reaction-reagent-placement.js"></script>

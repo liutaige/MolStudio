@@ -83,7 +83,7 @@ node fusion/patch-ketcher-agent.cjs
 
 后补电子流会按真实反应位点重排所属步骤；`checkedArrowIds` 列出实际核对的电子流，包括键源箭头。可读性按真实跨度、弧长与弧高检查，不能仅以无碰撞作为通过。排布使用原生字形尺寸预留结构间距，并以骨架中心对齐。省略 `lonePair.add.angle` 时，自动朝向会随被进攻原子和试剂停靠位置变化；显式角度编辑会清除自动绑定。该绑定与角度保留在 `.molwork` 中。
 
-`.molwork` 仍使用格式版本 1，扩展保存 `reactionSteps` 和 `reactionStepOperations`。旧 `reactionArrow.add` 继续兼容，也会获得稳定步骤身份；载入旧文件中尚无 `stepId`、`version` 的步骤记录时，宿主自动生成身份并从版本 1 开始。
+不含文档层的 `.molwork` 仍使用版本 1，扩展保存 `reactionSteps` 和 `reactionStepOperations`；含 `document` 的画布或纸页使用版本 2，旧构建会明确拒绝较新版本。旧 `reactionArrow.add` 继续兼容，也会获得稳定步骤身份；载入旧文件中尚无 `stepId`、`version` 的步骤记录时，宿主自动生成身份并从版本 1 开始。
 
 新步骤操作的 `op.id` 在文档内作为幂等键使用。文档级 `reactionStepOperations` 保存最近最多 2048 次步骤操作，包括已删除步骤的记录；在保留范围内，相同 ID 和参数的重试返回幂等回执，不会再次修改画布，重开文档后仍有效。相同 ID 对应不同参数返回 `operation_conflict`。Undo 保留已消耗的操作 ID，使迟到的重试不会复活用户刚撤销的内容；后续新修改使用新的 ID。其他绘图操作沿用原有的运行级幂等机制。
 
@@ -126,6 +126,8 @@ MOLSTUDIO_PORT=48975 MOLSTUDIO_AGENT_TEST_OUT="$(mktemp -d)" \
 `test_agent_task_checkpoint_real.cjs` 不调用模型；它在真实主画布中检查任务账本的事务合并、运行与文档隔离、保存重开、重复操作阻断和新任务独立身份。
 `test_agent_proton_transfer_real.cjs` 以一次真实模型误画后保存的可编辑图为夹具，通过合成工具流检查错误的供体键电子流被拒绝并回滚，以及随后改向供体原子的修复。
 
+纸页模式的 `read_canvas` 上下文包含页面内容区、文档对象与区域；自动排布以当前页面为目标，内容无法安全放入时回滚当前批次并提示需要空间。页高自动分页仍未实现。
+
 真实模型验收使用服务端已配置的模型与凭据。启动待交付构建的本地服务后，按改动选一个能复现问题的用例。多路线排版用下面的咖啡因用例，同一路线换行用 `ketal`，从已有弯箭头继续绘制用 `duplicate-arrow`。探针记录真实请求数，并导出 PNG 与 `.molwork`。检查导出的最终画布和报告中的完成状态。
 
 ```sh
@@ -141,6 +143,32 @@ MOLSTUDIO_PORT=48975 MOLSTUDIO_AGENT_TEST_OUT="$(mktemp -d)" MOLSTUDIO_REAL_AGEN
   MOLSTUDIO_TEST_BUILD=/absolute/path/to/MolStudio.app MOLSTUDIO_AGENT_REAL_LIMIT=12 \
   fusion/node_modules/.bin/electron fusion/tests/test_agent_phases_real.cjs
 ```
+
+
+纸页咖啡因路线使用同一个真实模型探针，需先启动实际待测构建的服务；下例按构建单独指定端口和产物目录：
+
+```sh
+MOLSTUDIO_PORT=49177 MOLSTUDIO_TEST_BUILD=/absolute/path/to/MolStudio.app \
+  MOLSTUDIO_AGENT_TEST_OUT=/absolute/path/to/paper-run MOLSTUDIO_REAL_AGENT=1 \
+  MOLSTUDIO_AGENT_PAPER_MODE=1 MOLSTUDIO_AGENT_REAL_CASES=caffeine-routes \
+  MOLSTUDIO_AGENT_REAL_LIMIT=6 MOLSTUDIO_AGENT_TASK_LIMIT=6 \
+  env -u ELECTRON_RUN_AS_NODE fusion/node_modules/.bin/electron fusion/tests/test_agent_integration.cjs
+```
+
+达到请求上限而返回 `needs_continue` 时保留报告和 `.molwork`，不可算完成；要在新一轮继续，使用保存的断点并明确单独记录新构建及请求数：
+
+```sh
+MOLSTUDIO_PORT=49177 MOLSTUDIO_TEST_BUILD=/absolute/path/to/MolStudio.app \
+  MOLSTUDIO_AGENT_TEST_OUT=/absolute/path/to/paper-resumed MOLSTUDIO_REAL_AGENT=1 \
+  MOLSTUDIO_AGENT_PAPER_MODE=1 MOLSTUDIO_AGENT_REAL_CASES=caffeine-routes \
+  MOLSTUDIO_AGENT_REAL_SEED_FILE=/absolute/path/to/paper-run/real-caffeine-routes.molwork \
+  MOLSTUDIO_AGENT_REAL_LIMIT=6 MOLSTUDIO_AGENT_TASK_LIMIT=6 \
+  env -u ELECTRON_RUN_AS_NODE fusion/node_modules/.bin/electron fusion/tests/test_agent_integration.cjs
+```
+
+本轮分构建结果与局限见 [文档模式结果](../DOCUMENT_MODE_RESULTS.md)。完成状态、路线分区、换行衔接、每步电子流、最终截图与可编辑文件均须查看实际报告，不能仅凭命令退出码推断。
+
+排查真实批次失败时，可加 `MOLSTUDIO_AGENT_CAPTURE_TRANSACTIONS=1`。探针会在该轮产物的 `transactions/` 保存失败前后的完整 `.molwork`、操作列表和布局诊断；成功调用仅留轻量记录。观察器不调用会提交文字编辑的保存入口，并检查作者内容、选区、视口、历史与 dirty 均未被观察改变。快照来自声明的待测包，可离线重放失败批次，避免仅凭最终回滚后的画布猜测原因。
 
 `test_agent_phases_real.cjs` 使用单次半缩醛任务检查模型创建的多个阶段、跨阶段真实请求、停止后保存重开与明确继续，以及操作身份不重复。测试要求服务显式配置 DeepSeek 生成设置和 16384 的上限；默认核对 low，设 `MOLSTUDIO_AGENT_EXPECT_EFFORT=high` 则核对 high，服务侧也须使用对应档位。探针只记录转发字段与选定元数据，不保存隐藏思考或凭据。测试请求上限及超时分别用 `MOLSTUDIO_AGENT_REAL_LIMIT`（默认 12，最多 20）和 `MOLSTUDIO_AGENT_WATCHDOG_MS`（默认 900000，最多 1200000）控制；上限是验收保护，不是产品任务上限。最终还需人工核对各阶段化学、电子流、布局、说明与完成状态，测试命令或阶段数本身不能证明化学正确。
 
@@ -210,6 +238,8 @@ MOLSTUDIO_REAL_AGENT=1 MOLSTUDIO_AGENT_EXTERNAL_CASE=hemiacetal \
 上例的生成参数仅传给隔离验收服务，须由已配置模型支持，不写回用户设置。也可用 `MOLSTUDIO_AGENT_EXTERNAL_GATEWAY_URL=http://127.0.0.1:8462` 只复用现有模型网关（画布仍隔离）；此时生成参数由该网关的原设置决定。可选 `MOLSTUDIO_AGENT_EXTERNAL_CASE=corey-winter`、`MOLSTUDIO_AGENT_EXTERNAL_DETAIL=full`。探针仅提供 8 个 MolStudio 工具，不能替代完整通用 Harness 的前后对比；超时和化学/几何失败必须按报告区分，不能把等待模型生成计作 MCP 工具执行耗时。
 
 更新 MCP 后需重连已有 MCP 进程，让 Harness 重新读取工具 schema 和服务说明；无需更改其连接配置。原生包的 MCP 资源也需随应用重新打包。
+
+原生桌面界面中，画布助手侧栏/抽屉通过 `fusion/agent/native-renderer.js` 与 `fusion/workbench/native-ui-bridge.js` 向宿主同步规范化的会话快照与时间线；跨语言契约回归见 `node --test fusion/tests/test_native_agent_renderer.cjs` 与 [native regression](../../fusion-native/regression/README.md)。
 
 本机 DeepSeek Harness（DSH）通过配置型 bundle [integrations/dsh-molstudio-mcp](../../integrations/dsh-molstudio-mcp/README.md) 接入：只插入一条 `@deepseek-ai/dsh-mcp-client` 行，以 `stdio` 运行 `mcp_server.py`，工具名为 `mcp__molstudio__*`。在 DSH 的 **Plugins** 中安装该目录，或在 `plugin_manager` 用该路径 `install_bundle`；停用 bundle 即断开，不改动其他 profile 状态。自动拉起只认随包携带 `Contents/Resources/agent_external_bridge.py` 的 `MolStudio.app`；旧构建会跳过并回退到开发服务（`fusion/server.py` + `canvas.html`），因此桥接更新后需重新打包应用才能用打包版协同。
 

@@ -21,6 +21,8 @@ const preferEvents = '(window.molstudioClipboard&&window.molstudioClipboard.pref
 const externalSelection = '(window.molstudioClipboard&&typeof window.molstudioClipboard.hasSelection==="function"&&window.molstudioClipboard.hasSelection())';
 const callHook = (name, args) => 'window.molstudioClipboard&&typeof window.molstudioClipboard.'+name+'==="function"&&window.molstudioClipboard.'+name+'('+args+')';
 const placementMeta = (struct, origin, target, rotation) => '{token:'+struct+'.molstudioClipboardToken,scale:'+struct+'.molstudioClipboardScale||1,origin:{x:'+origin+'.x,y:'+origin+'.y},target:{x:'+target+'.x,y:'+target+'.y},offset:{x:'+target+'.x-'+origin+'.x,y:'+target+'.y-'+origin+'.y},rotation:'+rotation+'}';
+const legacyCommitAfter = 'var B=this.action;delete this.action;var molstudioAction=this.isSingleContractedGroup&&this.mergeItems?null:js(this.editor,this.mergeItems,B);this.molstudioClipboardCommitted=!0,molstudioAction&&('+callHook('nativePasteCommit', 'molstudioAction,this.struct.molstudioClipboardToken')+'),this.editor.tool("select")';
+const commitAfter = 'var B=this.action;delete this.action;var molstudioAction=this.isSingleContractedGroup&&this.mergeItems?null:js(this.editor,this.mergeItems,B);this.molstudioClipboardCommitted=!0,'+callHook('nativePasteCommit', 'molstudioAction,this.struct.molstudioClipboardToken')+',this.editor.tool("select")';
 
 // Each anchor is intentionally scoped to one native handler/action. In particular,
 // do not change LS(), OS(), isClipboardAPIAvailable(), or the global Yt() predicate.
@@ -126,7 +128,9 @@ const patches = [
   {
     name: 'native PasteTool: expose the exact committed history action after native fusion/push',
     before: 'var B=this.action;delete this.action,this.isSingleContractedGroup&&this.mergeItems||js(this.editor,this.mergeItems,B),this.editor.tool("select")',
-    after: 'var B=this.action;delete this.action;var molstudioAction=this.isSingleContractedGroup&&this.mergeItems?null:js(this.editor,this.mergeItems,B);this.molstudioClipboardCommitted=!0,molstudioAction&&('+callHook('nativePasteCommit', 'molstudioAction,this.struct.molstudioClipboardToken')+'),this.editor.tool("select")'
+    // A contracted group may finish without a history action. Hosts must still
+    // receive the end signal to clear their native preview fence.
+    after: commitAfter
   },
   {
     name: 'native PasteTool: expose the committed contracted-group history action',
@@ -159,6 +163,8 @@ function occurrences(source, anchor) { return source.split(anchor).length - 1; }
 function digest(source) { return crypto.createHash('sha256').update(source).digest('hex'); }
 
 function patchSource(source) {
+  const migrated = occurrences(source, legacyCommitAfter) === 1;
+  if (migrated) source = source.replace(legacyCommitAfter, commitAfter);
   const states = patches.map(patch => {
     const before = occurrences(source, patch.before), after = occurrences(source, patch.after);
     if (before === 1 && after === 0) return 'upstream';
@@ -173,7 +179,7 @@ function patchSource(source) {
   for (const patch of require('./patch-ketcher-agent.cjs').patches) upstream = upstream.replace(patch.after, patch.before);
   for (const patch of require('./patch-ketcher-label-spacing.cjs').patches) upstream = upstream.replace(patch.after, patch.before);
   if (digest(upstream) !== upstreamSha256) throw new Error('Unsupported Ketcher bundle SHA-256; review the upstream change before updating this patch');
-  if (alreadyPatched) return { source, changed: false };
+  if (alreadyPatched) return { source, changed: migrated };
   let patched = source;
   for (const patch of patches) patched = patched.replace(patch.before, patch.after);
   return { source: patched, changed: true };
@@ -190,4 +196,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { bundlePath, upstreamSha256, patches, patchSource };
+module.exports = { bundlePath, upstreamSha256, patches, patchSource, legacyCommitAfter };

@@ -160,8 +160,13 @@
     }
 
     onAdapterChange(kind) {
-      if (kind === 'struct') this._scene = null; // 改元素/电荷/键级也会改变障碍，不只坐标变化
-      this.refreshAutoSlots();
+      // The mechanism SVG lives inside the same viewBox as the structures;
+      // translating that camera already moves every arrow, dot and handle.
+      if (kind === 'pan') return;
+      // Label envelopes and screen-size clearances can change with zoom; drop
+      // their cached scene without recomputing chemistry or rerouting arrows.
+      this._scene = null;
+      if (kind !== 'transform') this.refreshAutoSlots();
       if (kind === 'struct') this.pruneSelection();
       this.render();
     }
@@ -717,6 +722,15 @@
     }
 
     onNativeMouse(e) {
+      if (this.nativePasteSession && e.type === 'mouseup') {
+        const tool = this.adapter.ed.tool?.();
+        if (tool?.isSingleContractedGroup && tool.mergeItems && (this.nativePasteSession.document || this.nativePasteSession.lonePairSession || this.nativePasteSession.sourceArrows.length || this.nativePasteSession.reactionSteps)) {
+          e.preventDefault(); e.stopImmediatePropagation();
+          this.adapter.ed.tool('select'); this.cancelNativePaste();
+          this.status('带文档对象或孤对的片段请放在空白处；此次融合粘贴已取消');
+          return;
+        }
+      }
       if (this.nativePasteSession) return; // 混合片段的完整放置手势由原生 PasteTool 拥有
       if ((this.tool !== 'select' || this.draft || this.drag || this.pastePreview || this.suppressPasteMouse) && this.isCanvasTarget(e.target)) {
         e.preventDefault(); e.stopPropagation();
@@ -762,6 +776,50 @@
       if (this.tool === 'lonePair') return this.onLonePairDown(e, p);
 
       if (this.tool === 'arrow2' || this.tool === 'arrow1') return this.onArrowDown(e, p);
+
+      /* 自由基工具（先选功能再选目标）：单击原子 = 可撤销地切换其自由基标记。
+       * 与 lonePair 相同的工具流；其他点击（键/空白/隐式 H）只给提示，不改结构。 */
+      if (this.tool === 'radical') return this.onRadicalDown(e, p);
+    }
+
+    onRadicalDown(e, p) {
+      const hit = this.hitTest(p, { atomsOnly: true });
+      if (hit && hit.kind === 'implicitHydrogen') {
+        e.preventDefault(); e.stopPropagation();
+        this.status(this.implicitHydrogenHint());
+        return;
+      }
+      if (!hit || hit.kind !== 'atom') {
+        e.preventDefault(); e.stopPropagation();
+        this.status('自由基工具：请点在原子上');
+        return;
+      }
+      e.preventDefault(); e.stopPropagation();
+      const runtimeId = this.adapter.atomIdOf(hit.atomId);
+      const atom = runtimeId === null ? null : this.adapter.struct().atoms.get(runtimeId);
+      if (!atom) { this.status('自由基工具：原子不可用'); return; }
+      const so = this.win && this.win.molstudioNativeStructOps;
+      const ctab = this.adapter.ed && this.adapter.ed.render && this.adapter.ed.render.ctab;
+      if (!so || so.version !== 1 || !ctab || !ctab.molecule.atoms.has(runtimeId)) {
+        this.status('当前编辑器不支持自由基设置');
+        return;
+      }
+      const id = runtimeId;
+      const inverse = [];
+      const action = (ops) => ({ operations: ops, isDummy: () => false, perform(target) {
+        const reverse = [];
+        for (let i = ops.length - 1; i >= 0; i--) reverse.push(ops[i].perform(target));
+        so.recalc(target.molecule, [id]);
+        return action(reverse);
+      } });
+      this.commit(() => {
+        inverse.push(new so.atomAttr(id, 'radical', atom.radical ? 0 : 2).perform(ctab));
+        so.recalc(ctab.molecule, [id]);
+        this.adapter.syncIdentity();
+        if (typeof this.refreshAutoSlots === 'function') this.refreshAutoSlots();
+      }, atom.radical ? '移除自由基' : '设置自由基');
+      this.status(atom.radical ? '已移除自由基标记' : '已添加自由基标记');
+      this.render();
     }
 
     onSelectDown(e, p) {
@@ -1042,6 +1100,10 @@
 
     onPointerMove(e) {
       if (editableTarget(e.target)) return;
+      if (!this.drag && !this.draft && !this.pastePreview && !this.nativePasteSession && this.adapter.isHandTool?.()) {
+        if (this.hover) { this.hover = null; this.render(); }
+        return;
+      }
       if (!this.isCanvasTarget(e.target) && !this.drag && !this.draft && !this.pastePreview) {
         if (this.hover) { this.hover = null; this.render(); }
         return;
@@ -1405,6 +1467,7 @@
       if (!this.draft && !this.pastePreview) return;
       this.draft = null;
       this.pastePreview = null;
+      this.documentController?.clearFragmentPreview();
       this.status(reason ? '已取消（' + reason + '）' : '已取消当前草稿');
       this.render();
     }
@@ -1501,6 +1564,7 @@
           if (inside(M.quadPoint(geo.start, geo.control, geo.end, i / 16))) { this.selection.add(ar.id); break; }
         }
       }
+      this.documentController?.selectInBox(box, drag.additive);
       this.emitSelection();
       this.render();
     }
@@ -1669,7 +1733,7 @@
           // the same hook, leaving the native event to delete its selection.
           const sequence = ++this.nativePasteSequence;
           const token = 'native-delete-' + sequence;
-          const pending = { ids: Array.from(this.selection), sequence, token, consumed: false };
+          const pending = { ids: Array.from(this.selection), documentIds: [...(this.documentController?.selection || [])], stepRuntime: MW.app?.reactionSteps?.captureRuntime?.(), sequence, token, consumed: false };
           this.pendingNativeCuts.set(token, pending);
           const ed = this.adapter.ed;
           ed.molstudioClipboardCutToken = token;
@@ -1713,7 +1777,7 @@
     prepareClipboardReceiver(command) {
       if (!['copy', 'cut', 'paste'].includes(command) || this.focusedIsEditable()) return false;
       if (command !== 'paste') this.flushNativeMarquee();
-      if (command !== 'paste' && !this.selectedArrows().length && !this.hasNativeSelection()) return false;
+      if (command !== 'paste' && !this.selection.size && !this.documentController?.selection.size && !this.hasNativeSelection()) return false;
       const ed = this.adapter.ed;
       const cliparea = this.doc && this.doc.querySelector && this.doc.querySelector('[data-cliparea="true"]');
       if (!cliparea || !ed || typeof ed.focusCliparea !== 'function') return false;
@@ -1733,7 +1797,11 @@
       const native = this.hasNativeSelection();
       if (this.focusedIsEditable() || (native && !(options && options.allowNative))) return null;
       const arrows = this.selectedArrows().map(a => M.clone(a));
-      if (!arrows.length) return null;
+      const documentFragment = this.documentController?.clipboardFragment();
+      const reactionSteps = native ? MW.app?.reactionSteps?.captureClipboard?.() : null;
+      const capturedIdentity = MW.documentClipboard?.capture(this);
+      const identity = capturedIdentity && (arrows.length || capturedIdentity.lonePairs.length || reactionSteps?.steps?.length) ? capturedIdentity : null;
+      if (!arrows.length && !documentFragment && !identity?.lonePairs.length && !reactionSteps?.steps?.length) return null;
 
       // 端点的「实际绘制位置」：只复制箭头时绑定端点会转成自由端点，
       // 没有这个坐标，两端会一起落到 (0,0) 叠成一个点（看起来就是箭头消失了）。
@@ -1756,10 +1824,16 @@
 
       const payload = {
         kind: CLIP_KIND, version: CLIP_VERSION,
-        arrows: arrows, lonePairs: [],
-        selectedMechanismIds: arrows.map(a => a.id)
+        arrows: arrows, lonePairs: identity?.lonePairs.map(item => M.clone(item.lonePair)) || [],
+        selectedMechanismIds: [...new Set(arrows.map(a => a.id).concat(identity?.selectedMechanismIds || []))]
       };
       if (native) payload.native = true;
+      if (documentFragment) payload.document = documentFragment;
+      const usedSteps = new Set(arrows.map(arrow => arrow.stepId));
+      const mechanismSteps = (this.model.state.steps || []).filter(step => usedSteps.has(step.id));
+      if (mechanismSteps.length) payload.mechanismSteps = M.clone(mechanismSteps);
+      if (identity) payload.identity = identity;
+      if (reactionSteps?.steps?.length) payload.reactionSteps = reactionSteps;
       return payload;
     }
 
@@ -1772,7 +1846,7 @@
     }
 
     /* 兼容调用入口；这里不导出 KET、不构造分子片段。 */
-    async buildCopyPayloadFresh() { return this.buildCopyPayload(); }
+    async buildCopyPayloadFresh() { try { return this.buildCopyPayload(); } catch (error) { this.status(error.message); return null; } }
 
     /* 打包并等待系统剪贴板确认；不修改文档。 */
     async copySelection() {
@@ -1799,6 +1873,7 @@
         this.status('请重新选择分子，使用原生剪切');
         return false;
       }
+      if (payload.document?.objects?.length) return this.documentController?.cutFragment(payload);
       const ids = Array.isArray(payload.selectedMechanismIds) ? payload.selectedMechanismIds : (payload.arrows || []).map(a => a.id).concat((payload.lonePairs || []).map(l => l.id));
       if (!ids.length) return false;
       const ok = this.commit(() => {
@@ -1810,11 +1885,16 @@
       return true;
     }
 
+    hasNativeClipboardBridge() {
+      const bridge = root.webkit && root.webkit.messageHandlers && root.webkit.messageHandlers.k3d;
+      return !!(bridge && typeof bridge.postMessage === 'function');
+    }
+
     /* 仅写机理扩展载荷，普通复制由 WebKit / Ketcher 写系统剪贴板。 */
     async writeClipboard(text) {
-      const bridge = root.webkit && root.webkit.messageHandlers && root.webkit.messageHandlers.k3d;
       try {
-        if (bridge && typeof bridge.postMessage === 'function') {
+        if (this.hasNativeClipboardBridge()) {
+          const bridge = root.webkit.messageHandlers.k3d;
           const requestId = 'clip-' + Date.now() + '-' + Math.random().toString(36).slice(2);
           if (!this.pendingClipboardWrites) this.pendingClipboardWrites = new Map();
           const ok = await new Promise(resolve => {
@@ -1886,7 +1966,8 @@
       this.flushNativeMarquee();
       this.pendingNativeCut = null;
       const native = this.hasNativeSelection();
-      const payload = this.buildCopyPayload({ allowNative: native });
+      let payload;
+      try { payload = this.buildCopyPayload({ allowNative: native }); } catch (error) { e.preventDefault(); e.stopPropagation(); this.status(error.message); return true; }
       if (!payload) return false;
       if (native) {
         // 仅追加箭头 sidecar，Ketcher 自己继续写入分子格式及执行原生剪切。
@@ -1905,13 +1986,15 @@
         if (cut) {
           const sequence = ++this.nativePasteSequence;
           this.pendingNativeCut = { ids: payload.selectedMechanismIds.slice(), sequence: sequence,
-            token: 'native-cut-' + sequence, consumed: false };
+            token: 'native-cut-' + sequence, documentIds: payload.document?.objects?.map(o => o.id) || [], stepRuntime: MW.app?.reactionSteps?.captureRuntime?.(), consumed: false };
           this.pendingNativeCuts.set(this.pendingNativeCut.token, this.pendingNativeCut);
         }
         else setTimeout(() => {
           // 原生复制完成后会清空原生选区；同步清掉同一份箭头选区，避免再次 Cmd+C
           // 把刚复制的混合片段意外覆盖成只有箭头。异步期间的新选区不受影响。
           if (!e.defaultPrevented || this.hasNativeSelection()) return;
+          const documentIds = payload.document?.objects?.map(o => o.id) || [];
+          if (this.documentController && this.documentController.selection.size === documentIds.length && documentIds.every(id => this.documentController.selection.has(id))) { this.documentController.selection.clear(); this.documentController.render(); this.documentController.emit(); }
           const ids = payload.selectedMechanismIds;
           if (this.selection.size === ids.length && ids.every(id => this.selection.has(id))) {
             this.selection.clear(); this.emitSelection(); this.render();
@@ -1921,6 +2004,20 @@
         return true;
       }
       e.preventDefault(); e.stopPropagation();
+      // In browser mode, keep synchronous DataTransfer writes (avoids async
+      // Clipboard permission prompts). In native WKWebView mode, route pure
+      // mechanism/document copies exclusively through the Swift host bridge so
+      // raw JSON never leaks into NSPasteboard .string via text/plain.
+      if (!this.hasNativeClipboardBridge() && e.clipboardData && typeof e.clipboardData.setData === 'function') {
+        try {
+          const text = JSON.stringify(payload);
+          e.clipboardData.setData(CLIP_MIME, text);
+          e.clipboardData.setData('text/plain', text);
+        } catch (error) { this.status('剪贴板写入失败，未剪切内容：' + error.message); return true; }
+        if (cut) this.cutAfterCopy(payload);
+        else this.status('已复制 ' + describePayload(payload));
+        return true;
+      }
       this.writeClipboard(JSON.stringify(payload)).then(ok => {
         if (!ok) return;
         if (cut) this.cutAfterCopy(payload);
@@ -1943,7 +2040,7 @@
       try { mixed = this.isMechanismPayload(sidecar) && JSON.parse(sidecar).native === true; } catch (err) { /* 无效 sidecar 不能影响原生粘贴 */ }
       if (mixed && !editableTarget(e.target)) {
         // 原生分子解析与鼠标放置照常进行；箭头只等待其精确位移和同一个历史动作。
-        this.stageNativePaste(sidecar);
+        if (!this.stageNativePaste(sidecar)) { e.preventDefault(); e.stopPropagation(); this.status(this.lastStatusText || '混合片段无效，未粘贴任何内容'); }
         return;
       }
       this.cancelNativePaste();
@@ -2011,13 +2108,27 @@
       if (payload.version !== CLIP_VERSION || !Array.isArray(payload.arrows) || !Array.isArray(payload.lonePairs)) return false;
       M.validateMechanism({ arrows: payload.arrows, lonePairs: payload.lonePairs }, errors);
       if (errors.length) { this.status('机理剪贴板数据无效'); return false; }
-      if (!payload.arrows.length) {
+      if (!payload.arrows.length && !payload.document?.objects?.length && !payload.identity?.lonePairs?.length && !payload.nativeOnly && !payload.reactionSteps?.steps?.length) {
         this.status('孤对依附于原子；请在目标原子上用孤对工具添加');
         return false;
       }
+      if (payload.mechanismSteps !== undefined) {
+        const errors = []; M.validateMechanism({ arrows: [], lonePairs: [], steps: payload.mechanismSteps }, errors);
+        if (errors.length || payload.mechanismSteps.length > 200 || payload.mechanismSteps.some(step => typeof step.label !== 'string' || step.label.length > 1000)) { this.status('复制片段的机理步骤无效'); return false; }
+      }
+      if (payload.reactionSteps) {
+        const check = MW.reactionStepClipboard?.validate(payload.reactionSteps);
+        if (!check?.ok || !MW.app?.reactionSteps?.appendClipboard) { this.status(check?.errors?.join('；') || '反应步骤粘贴模块尚未就绪'); return false; }
+      }
+      if (payload.identity) { try { MW.documentClipboard.validate(payload.identity); } catch (e) { this.status(e.message); return false; } }
+      if (payload.document) { try { if (!this.documentController?.prepareFragment(payload.document)) return false; } catch (e) { this.status(e.message); return false; } }
       return payload;
     }
 
+    prepareMechanismClipboardSteps(steps) {
+      const idMap = new Map(), copies = (steps || []).map(step => { const id = M.newId('step'); idMap.set(step.id, id); return { id, label: step.label }; });
+      return { steps: copies, idMap };
+    }
     detachedArrows(payload, offsetX, offsetY) {
       return payload.arrows.map(ar => {
         const src = this.detachedEndpoint(ar.source, offsetX, offsetY);
@@ -2026,13 +2137,14 @@
         const g = ar.geometry || {};
         return M.makeArrow(src, tgt, { electronCount: ar.electronCount, bend: g.bend,
           mode: g.mode === 'auto' ? 'auto' : 'manual', routeVersion: g.routeVersion || 0,
-          controlFrame: g.controlFrame });
+          controlFrame: g.controlFrame, stepId: ar.stepId });
       });
     }
 
     // 分子和箭头同一次粘贴：这里只暂存箭头，分子的解析、归一化和放置均由原生执行。
     stageNativePaste(text) {
       this.cancelNativePaste();
+      if (typeof this.adapter.ed.tool === 'function') this.adapter.ed.tool('select');
       this.pendingNativeCut = null;
       const payload = this.parsePastePayload(text);
       if (!payload || payload.native !== true) return false;
@@ -2044,7 +2156,13 @@
       this.suppressPasteMouse = false;
       this.nativeMarquee = null;
       const token = 'native-paste-' + (++this.nativePasteSequence);
-      this.nativePasteSession = { token: token, sourceArrows: arrows, arrows: [], active: false };
+      this.lastNativePasteResult = null;
+      const nativeStruct = this.adapter.struct?.() || {};
+      const mechanismSteps = this.prepareMechanismClipboardSteps(payload.mechanismSteps);
+      const beforeNativePools = Object.fromEntries(['atoms', 'bonds', 'frags', 'rxnArrows', 'texts', 'rxnPluses', 'simpleObjects', 'images', 'multitailArrows', 'sgroups'].map(map => [map, new Set(nativeStruct[map]?.keys() || [])]));
+      this.nativePasteSession = { token: token, sourceArrows: arrows, arrows: [], document: this.documentController?.prepareFragment(payload.document), originalArrows: M.clone(payload.arrows),
+        lonePairSession: payload.identity ? MW.documentClipboard.stage(payload.identity, this) : null, reactionSteps: payload.reactionSteps || null, mechanismSteps, beforeNativePools,
+        historyPtr: this.adapter.ed.historyPtr, historyStack: this.adapter.ed.historyStack?.slice(), historyTop: this.adapter.ed.historyStack?.[this.adapter.ed.historyPtr - 1], active: false };
       return token;
     }
 
@@ -2079,7 +2197,9 @@
         copy.source = transform(ar.source); copy.target = transform(ar.target);
         return copy;
       });
-      session.active = true;
+      session.active = true; session.meta = M.clone(meta);
+      if (session.lonePairSession) MW.documentClipboard.move(session.lonePairSession, meta);
+      this.documentController?.transformFragment(session.document, meta);
       this.render();
       return true;
     }
@@ -2091,6 +2211,7 @@
       if (!session || (arguments.length > 0 && session.token !== token)) return false;
       if (temporary) session.active = false;
       else this.nativePasteSession = null;
+      this.documentController?.clearFragmentPreview();
       this.render();
       return true;
     }
@@ -2110,35 +2231,88 @@
       return action;
     }
 
+    wrapNativePoolHistory(action, before, after) {
+      const controller = this, original = action.perform;
+      action.perform = function () {
+        const inverse = original.apply(this, arguments), st = controller.adapter.struct();
+        for (const [name, ids] of Object.entries(before || {})) {
+          const pool = st[name]; if (!pool?.entries || !pool?.delete || !pool?.set) continue;
+          const values = new Map(pool.entries()), order = [...ids].filter(id => values.has(id));
+          for (const id of values.keys()) if (!order.includes(id)) order.push(id);
+          for (const id of values.keys()) pool.delete(id);
+          for (const id of order) pool.set(id, values.get(id));
+        }
+        return controller.wrapNativePoolHistory(inverse, after, before);
+      };
+      return action;
+    }
     commitNativePaste(action, token) {
       const session = this.nativePasteSession;
-      if (!session || session.token !== token || !session.active || !session.arrows.length) return action;
+      if (!session || session.token !== token || !session.active) return action;
+      if (!action || typeof action.perform !== 'function') {
+        this.cancelNativePaste(token);
+        this.lastNativePasteResult = { ok: false, token, error: '混合内容不能融合到现有缩合组，请在空白处放置' };
+        this.status(this.lastNativePasteResult.error); return action;
+      }
       const before = this.model.cloneState(), beforeSelection = new Set(this.selection);
       const copies = session.arrows.map(ar => M.clone(ar));
       this.nativePasteSession = null;
       try {
-        for (const ar of copies) this.model.addArrow(ar);
-        const after = this.model.cloneState(), afterSelection = new Set(copies.map(ar => ar.id));
-        const ed = this.adapter.ed;
-        const top = ed.historyStack && ed.historyStack[ed.historyPtr - 1];
-        if (top === action && action && typeof action.perform === 'function') {
-          this.wrapNativeHistory(action, before, after, beforeSelection, afterSelection);
-          this.selection = afterSelection;
-          this.onDirtyHint('粘贴分子和箭头');
-        } else {
-          // 原生精确融合可能没有新增历史；仅箭头仍沿用既有机理历史，绝不重做分子插入。
-          if (ed.historyPtr !== session.historyPtr || top !== session.historyTop) throw new Error('原生历史已变化，无法合并箭头');
-          this.model.setState(before, 'silent');
-          this.selection = afterSelection;
-          if (!this.commitStatePair(before, after, '粘贴箭头')) throw new Error('无法提交到历史');
+        const ed = this.adapter.ed, top = ed.historyStack?.[ed.historyPtr - 1];
+        let lonePairs = [], resolved = null, stepOutcome = null;
+        if (session.lonePairSession) {
+          resolved = MW.documentClipboard.resolve(this, session.lonePairSession);
+          if (!resolved.ok) throw new Error(resolved.error);
+          lonePairs = resolved.lonePairs;
+          copies.forEach((ar, index) => { for (const side of ['source', 'target']) { const endpoint = MW.documentClipboard.remapEndpoint(session.originalArrows[index][side], resolved); if (endpoint) ar[side] = endpoint; } });
         }
-        this.emitSelection(); this.render();
-        this.status('已随原生片段粘贴 ' + copies.length + ' 根箭头');
+        if (session.reactionSteps) {
+          if (top !== action || !action?.perform || !resolved) throw new Error('步骤粘贴缺少完整的原生历史或原子对应');
+          const steps = MW.app.reactionSteps;
+          stepOutcome = steps.appendClipboard(session.reactionSteps, resolved, { ...session.meta, beforeNativePools: session.beforeNativePools });
+          steps.wrapClipboardHistory(action, stepOutcome);
+          copies.forEach((arrow, index) => { const id = stepOutcome.stepIdMap.get(session.originalArrows[index].stepId); if (id) arrow.stepId = id; });
+        }
+        for (const step of session.mechanismSteps?.steps || []) this.model.state.steps.push(M.clone(step));
+        copies.forEach((arrow, index) => { const sourceId = session.originalArrows[index].stepId; if (!stepOutcome?.stepIdMap.has(sourceId) && session.mechanismSteps?.idMap.has(sourceId)) arrow.stepId = session.mechanismSteps.idMap.get(sourceId); });
+        for (const lp of lonePairs) this.model.addLonePair(lp);
+        for (const ar of copies) this.model.addArrow(ar);
+        const after = this.model.cloneState(), afterSelection = new Set(copies.map(ar => ar.id).concat(lonePairs.map(lp => lp.id)));
+        if (top === action && action && typeof action.perform === 'function') {
+          const current = this.adapter.struct(), afterPools = Object.fromEntries(Object.keys(session.beforeNativePools || {}).map(key => [key, new Set(current[key]?.keys() || [])]));
+          this.wrapNativePoolHistory(action, session.beforeNativePools, afterPools);
+          if (copies.length || lonePairs.length || session.mechanismSteps?.steps.length) this.wrapNativeHistory(action, before, after, beforeSelection, afterSelection);
+          this.documentController?.commitNativeFragment(action, session.document);
+          this.selection = afterSelection;
+          this.onDirtyHint('粘贴所选内容');
+        } else {
+          if (ed.historyPtr !== session.historyPtr || top !== session.historyTop) throw new Error('原生历史已变化，无法合并粘贴内容');
+          this.model.setState(before, 'silent'); this.selection = afterSelection;
+          if (session.document) this.documentController.pasteFragment(session.document, copies, lonePairs, session.mechanismSteps?.steps);
+          else if (copies.length || lonePairs.length || session.mechanismSteps?.steps.length) {
+            if (!this.commitStatePair(before, after, '粘贴机理对象')) throw new Error('无法提交到历史');
+          }
+        }
+        // Post-native step label replacement runs after Ketcher's paste update.
+        // Refresh its text bounds before a save/export can observe the action.
+        if (stepOutcome?.inverses.length) ed.update(true);
+        this.documentController?.clearFragmentPreview(); this.emitSelection(); this.render();
+        this.lastNativePasteResult = { ok: true, token };
+        this.status('已粘贴所选内容（可一次撤销）');
       } catch (e) {
-        this.model.setState(before, 'silent');
-        this.selection = beforeSelection;
-        this.emitSelection(); this.render();
-        this.status('箭头粘贴失败：' + (e && e.message ? e.message : e));
+        const ed = this.adapter.ed, top = ed.historyStack?.[ed.historyPtr - 1];
+        if (top === action) {
+          try {
+            action.perform(ed.render.ctab);
+            if (session.historyStack) { ed.historyStack = session.historyStack; ed.historyPtr = session.historyPtr; }
+            else { ed.historyStack.splice(ed.historyPtr - 1, 1); ed.historyPtr--; }
+            ed.update(true);
+          } catch (rollbackError) { this.status('粘贴恢复失败：' + rollbackError.message); }
+        }
+        this.model.setState(before, 'silent'); this.selection = beforeSelection;
+        this.documentController?.clearFragmentPreview(); this.emitSelection(); this.render();
+        this.lastNativePasteResult = { ok: false, token, error: e && e.message ? e.message : String(e) };
+        this.status('粘贴失败，已撤回本次放置：' + (e && e.message ? e.message : e));
       }
       return action;
     }
@@ -2176,7 +2350,9 @@
         }
         const after = this.model.cloneState();
         const afterSelection = new Set([...beforeSelection].filter(id => !cut.ids.includes(id)));
+        if (cut.stepRuntime && MW.app?.reactionSteps?.wrapClipboardHistory) MW.app.reactionSteps.wrapClipboardHistory(action, { before: cut.stepRuntime, after: MW.app.reactionSteps.captureRuntime(), inverses: [], stepIdMap: new Map() });
         this.wrapNativeHistory(action, before, after, beforeSelection, afterSelection);
+        this.documentController?.commitNativeCut(action, cut.documentIds);
         this.selection = afterSelection;
         this.emitSelection(); this.render();
         const deleting = token.indexOf('native-delete-') === 0;
@@ -2198,7 +2374,11 @@
       let arrows;
       try { arrows = this.detachedArrows(payload, 0, 0); }
       catch (e) { this.status('粘贴失败：' + e.message); return false; }
+      const documentFragment = this.documentController?.prepareFragment(payload.document);
+      const mechanismSteps = this.prepareMechanismClipboardSteps(payload.mechanismSteps);
+      arrows.forEach((arrow, index) => { const id = mechanismSteps.idMap.get(payload.arrows[index].stepId); if (id) arrow.stepId = id; });
       const points = [];
+      for (const o of documentFragment?.objects || []) points.push({ x: o.x, y: o.y }, { x: o.x + o.w, y: o.y + o.h });
       for (const ar of arrows) {
         const geo = M.arrowGeometry(ar, this.ctx());
         points.push(geo.start, geo.control, geo.end);
@@ -2213,7 +2393,7 @@
       this.adapter.clearSelection();
       this.selection.clear();
       this.hover = null;
-      this.pastePreview = { sourceArrows: arrows, arrows: arrows, anchor: anchor };
+      this.pastePreview = { sourceArrows: arrows, arrows: arrows, anchor: anchor, document: documentFragment, mechanismSteps: mechanismSteps.steps };
       let pointer = this.lastPointer && this.lastPointer.model;
       const area = this.adapter.ed && this.adapter.ed.render && this.adapter.ed.render.clientArea;
       if (!pointer && area && typeof area.getBoundingClientRect === 'function') {
@@ -2231,6 +2411,7 @@
       const preview = this.pastePreview;
       if (!preview || !point || !M.finite(point.x) || !M.finite(point.y)) return;
       const dx = point.x - preview.anchor.x, dy = point.y - preview.anchor.y;
+      this.documentController?.transformFragment(preview.document, { offset: { x: dx, y: dy } });
       preview.arrows = preview.sourceArrows.map(ar => {
         const copy = M.clone(ar);
         copy.source.x += dx; copy.source.y += dy;
@@ -2243,9 +2424,11 @@
       if (!this.pastePreview) return false;
       this.movePastePreview(point);
       const arrows = this.pastePreview.arrows;
-      const before = this.model.cloneState(), oldSelection = new Set(this.selection);
+      if (this.pastePreview.document) { const fragment = this.pastePreview.document, steps = this.pastePreview.mechanismSteps; this.pastePreview = null; return this.documentController.pasteFragment(fragment, arrows, [], steps); }
+      const before = this.model.cloneState(), oldSelection = new Set(this.selection), mechanismSteps = this.pastePreview.mechanismSteps || [];
       this.pastePreview = null;
       try {
+        for (const step of mechanismSteps) this.model.state.steps.push(M.clone(step));
         for (const ar of arrows) this.model.addArrow(M.clone(ar));
         const after = this.model.cloneState();
         this.model.setState(before, 'silent');
@@ -2267,6 +2450,7 @@
       const payload = this.parsePastePayload(text);
       if (!payload) return false;
       const offset = this.nextPasteOffset(text);
+      if (payload.document) { const fragment = this.documentController.prepareFragment(payload.document); this.documentController.transformFragment(fragment, { offset: { x: offset, y: offset } }); return this.documentController.pasteFragment(fragment, this.detachedArrows(payload, offset, offset)); }
       const before = this.model.cloneState(), oldSelection = new Set(this.selection);
       const madeArrows = [];
       try {
