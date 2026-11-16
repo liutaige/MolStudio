@@ -25,7 +25,7 @@ npm --prefix fusion start
 | `fusion/canvas.html` | 唯一画布页面 |
 | `fusion/workbench/` | 机理数据、编辑、渲染、保存与 Ketcher 接口 |
 | `fusion/agent/` | AI 侧栏、工具循环、流式指令与验证 |
-| `fusion/server.py`、`stereo.py`、`inorganic.py`、`agent_gateway.py` | 本机 HTTP 服务、化学计算与模型网关 |
+| `fusion/server.py`、`stereo.py`、`conservative_layout.py`、`inorganic.py`、`agent_gateway.py` | 本机 HTTP 服务、化学计算与模型网关 |
 | `fusion/mcp_server.py`、`agent_external_bridge.py`、`mcp_response.py` | 外部 MCP 接口、画布连接与回包 |
 | `fusion/threed.html`、`fusion/vendor/ngl.js` | 当前 3D 预览 |
 | `fusion/tests/`、`fusion-native/regression/` | 当前产品回归与必要夹具 |

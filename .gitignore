@@ -9,6 +9,7 @@ fusion/tests/evidence/
 **/__pycache__/
 *.pyc
 fusion-native/.build/
+.build/
 fusion-native/dist/
 .venv-rdkit/
 # 归档/备份（大二进制）
@@ -18,6 +19,7 @@ backup/
 # 本地调查缓存与验收产物
 .cache/
 .jez/
+HANDOFF-*.md
 # 本地分支可保留文档应用；其他历史研究材料不再纳入源码
 research/*
 !research/document-editor-prototype/

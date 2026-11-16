@@ -1141,6 +1141,9 @@ enum WorkspaceIconHelper {
                 NSBezierPath(ovalIn: NSRect(x: 5.2, y: 7.4, width: 3.0, height: 3.0)).fill()
                 NSBezierPath(ovalIn: NSRect(x: 10.0, y: 7.4, width: 3.0, height: 3.0)).fill()
             }
+        case "insert.view3d":
+            // Same symbol as the native view3D toolbar item (cube.transparent).
+            return symbolImage("cube.transparent", accessibilityDescription: "3D 分子预览")
         case "radical", "tool.radical":
             return templateGlyph(size: NSSize(width: 18, height: 18)) { _ in
                 NSBezierPath(ovalIn: NSRect(x: 7.1, y: 7.1, width: 3.8, height: 3.8)).fill()

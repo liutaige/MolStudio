@@ -354,6 +354,187 @@ final class WorkspaceCommitTextFieldView: NSView, NSTextFieldDelegate {
     }
 }
 
+/// A real AppKit colour well that commits once per picker selection and is
+/// revision guarded like the numeric/text inspector controls.
+final class WorkspaceCommitColorWellView: NSView {
+    final class TrackingColorWell: NSColorWell {
+        var onMouseDown: (() -> Void)?
+        var onMouseDownEnded: (() -> Void)?
+        override func mouseDown(with event: NSEvent) {
+            onMouseDown?()
+            super.mouseDown(with: event)
+            onMouseDownEnded?()
+        }
+    }
+
+    let propertyId: String
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let valueLabel = NSTextField(labelWithString: "")
+    let colorWell = TrackingColorWell()
+
+    var hasActiveOwnedPickerSession: Bool {
+        capturedSelectionRevision != nil && (ownsPickerPanel || pickerActivationInProgress) && colorWell.isActive
+    }
+
+    private var committedValue: String = "#000000"
+    private var capturedSelectionRevision: Int?
+    private var ownsPickerPanel = false
+    private var pickerActivationInProgress = false
+    private var selectionRevisionProvider: () -> Int
+    var onCommitValue: ((String, String, Int) -> Void)?
+    var onRestoreCanvasFocus: (() -> Void)?
+
+    init(
+        property: WorkspaceSelectionProperty,
+        selectionRevision: Int,
+        selectionRevisionProvider: @escaping () -> Int,
+        onCommitValue: @escaping (String, String, Int) -> Void,
+        onRestoreCanvasFocus: (() -> Void)? = nil
+    ) {
+        self.propertyId = property.id
+        self.selectionRevisionProvider = selectionRevisionProvider
+        self.onCommitValue = onCommitValue
+        self.onRestoreCanvasFocus = onRestoreCanvasFocus
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        titleLabel.textColor = .labelColor
+        titleLabel.stringValue = property.label
+        valueLabel.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        valueLabel.textColor = .secondaryLabelColor
+        valueLabel.alignment = .right
+        valueLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        colorWell.controlSize = .small
+        colorWell.isContinuous = false
+        colorWell.isBordered = true
+        colorWell.target = self
+        colorWell.action = #selector(colorWellChanged(_:))
+        colorWell.onMouseDown = { [weak self] in
+            guard let self, self.colorWell.isEnabled else { return }
+            self.capturedSelectionRevision = self.selectionRevisionProvider()
+            self.ownsPickerPanel = false
+            self.pickerActivationInProgress = true
+        }
+        colorWell.onMouseDownEnded = { [weak self] in
+            guard let self else { return }
+            self.ownsPickerPanel = self.colorWell.isActive
+            self.pickerActivationInProgress = false
+        }
+
+        let row = NSStackView(views: [titleLabel, NSView(), valueLabel, colorWell])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 7
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            colorWell.widthAnchor.constraint(equalToConstant: 34),
+        ])
+        applyProperty(property, selectionRevision: selectionRevision)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    func applyProperty(_ property: WorkspaceSelectionProperty, selectionRevision: Int) {
+        titleLabel.stringValue = property.label
+        colorWell.isEnabled = property.enabled
+        if let captured = capturedSelectionRevision, captured != selectionRevision {
+            cancelInteraction()
+        }
+        if capturedSelectionRevision == nil {
+            committedValue = property.value?.stringValue ?? "#000000"
+            valueLabel.stringValue = committedValue
+            colorWell.color = Self.color(from: committedValue)
+        }
+    }
+
+    private func closeOwnedPickerPanel() {
+        let shouldClose = (ownsPickerPanel || pickerActivationInProgress) && colorWell.isActive
+        ownsPickerPanel = false
+        pickerActivationInProgress = false
+        guard shouldClose else { return }
+        colorWell.deactivate()
+        NSColorPanel.shared.orderOut(nil)
+    }
+
+    func cancelInteraction() {
+        capturedSelectionRevision = nil
+        closeOwnedPickerPanel()
+        valueLabel.stringValue = committedValue
+        colorWell.color = Self.color(from: committedValue)
+    }
+
+    @objc private func colorWellChanged(_ sender: NSColorWell) {
+        guard let expectedRevision = capturedSelectionRevision else {
+            sender.color = Self.color(from: committedValue)
+            return
+        }
+        if sender.isActive { ownsPickerPanel = true }
+        let value = Self.hex(from: sender.color)
+        // Some NSColorPanel modes can send an unchanged initial value when the
+        // panel opens. Keep the captured revision for the next actual choice.
+        guard value != committedValue else { return }
+        guard expectedRevision == selectionRevisionProvider() else {
+            cancelInteraction()
+            return
+        }
+        committedValue = value
+        valueLabel.stringValue = value
+        capturedSelectionRevision = nil
+        // One colour choice is one undoable property edit. Close the shared
+        // panel only when this well opened it, so no stale panel can keep
+        // targeting a retired view after the selection revision advances.
+        closeOwnedPickerPanel()
+        onCommitValue?(propertyId, value, expectedRevision)
+        onRestoreCanvasFocus?()
+    }
+
+    private static func color(from value: String) -> NSColor {
+        switch value.lowercased() {
+        case "transparent": return .clear
+        case "black": return .black
+        case "white": return .white
+        case "red": return .red
+        case "blue": return .blue
+        case "green": return .green
+        case "gray": return .gray
+        default: break
+        }
+        var hex = value.hasPrefix("#") ? String(value.dropFirst()) : value
+        guard [3, 4, 6, 8].contains(hex.count) else { return .black }
+        if hex.count == 3 || hex.count == 4 {
+            hex = hex.map { String(repeating: String($0), count: 2) }.joined()
+        }
+        guard let raw = UInt64(hex, radix: 16) else { return .black }
+        let hasAlpha = hex.count == 8
+        let red = CGFloat((raw >> (hasAlpha ? 24 : 16)) & 0xff) / 255
+        let green = CGFloat((raw >> (hasAlpha ? 16 : 8)) & 0xff) / 255
+        let blue = CGFloat((raw >> (hasAlpha ? 8 : 0)) & 0xff) / 255
+        let alpha = hasAlpha ? CGFloat(raw & 0xff) / 255 : 1
+        return NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    }
+
+    private static func hex(from color: NSColor) -> String {
+        let rgb = (color.usingColorSpace(.deviceRGB) ?? color).usingColorSpace(.deviceRGB) ?? .black
+        let red = Int((min(max(rgb.redComponent, 0), 1) * 255).rounded())
+        let green = Int((min(max(rgb.greenComponent, 0), 1) * 255).rounded())
+        let blue = Int((min(max(rgb.blueComponent, 0), 1) * 255).rounded())
+        let alpha = Int((min(max(rgb.alphaComponent, 0), 1) * 255).rounded())
+        return alpha < 255
+            ? String(format: "#%02X%02X%02X%02X", red, green, blue, alpha)
+            : String(format: "#%02X%02X%02X", red, green, blue)
+    }
+}
+
 /// Native property inspector displaying Elements, Templates, dynamic `selection.properties`, and context actions.
 private final class WorkspaceFlippedDocumentView: NSView {
     override var isFlipped: Bool { true }
@@ -385,6 +566,7 @@ final class WorkspacePropertiesViewController: NSViewController {
 
     private var sliderViewsById: [String: WorkspaceCommitSliderView] = [:]
     private var textFieldViewsById: [String: WorkspaceCommitTextFieldView] = [:]
+    private var colorWellViewsById: [String: WorkspaceCommitColorWellView] = [:]
     private var choicePopupsById: [String: NSPopUpButton] = [:]
     private var renderedPropertyIds: [String] = []
     private var lastRenderedSelectionRevision: Int = -1
@@ -428,13 +610,20 @@ final class WorkspacePropertiesViewController: NSViewController {
         refreshState()
     }
 
-    /// Cancels all uncommitted slider/text property edits without sending JS dispatch commands.
+    /// Cancels all uncommitted inspector edits without sending JS dispatch commands.
+    var hasActiveOwnedColorPickerSession: Bool {
+        colorWellViewsById.values.contains(where: \.hasActiveOwnedPickerSession)
+    }
+
     func cancelPendingLocalEdits() {
         for slider in sliderViewsById.values {
             slider.cancelInteraction()
         }
         for field in textFieldViewsById.values {
             field.cancelPendingEdit()
+        }
+        for colorWell in colorWellViewsById.values {
+            colorWell.cancelInteraction()
         }
     }
 
@@ -722,11 +911,15 @@ final class WorkspacePropertiesViewController: NSViewController {
         let ready = coordinator.isCanvasSurfaceReady(.inspector)
         let selection = coordinator.uiState.selection
         let hasSelection = ready && selection.kind != .none && selection.count > 0
+        let hasShapeDefaults = ready && !hasSelection && selection.label == "形状样式" && !selection.properties.isEmpty
 
         if !ready {
             cancelPendingLocalEdits()
             selectionTitleLabel.stringValue = "画布未就绪"
             selectionSubtitleLabel.stringValue = "正在连接编辑引擎，就绪前控件保持禁用"
+        } else if hasShapeDefaults {
+            selectionTitleLabel.stringValue = "形状样式"
+            selectionSubtitleLabel.stringValue = "设置当前形状工具创建对象时使用的默认样式"
         } else if !hasSelection {
             selectionTitleLabel.stringValue = "未选中对象"
             selectionSubtitleLabel.stringValue = "请在画布中选择原子、键、机理弯箭头或标注文本"
@@ -736,7 +929,7 @@ final class WorkspacePropertiesViewController: NSViewController {
             selectionSubtitleLabel.stringValue = "版本 #\(selection.revision) · 类型：\(selection.kind.rawValue)"
         }
 
-        syncDynamicProperties(selection.properties, revision: selection.revision, ready: ready && hasSelection)
+        syncDynamicProperties(selection.properties, revision: selection.revision, ready: ready && (hasSelection || hasShapeDefaults))
 
         let supportsReplan = ready && hasSelection && selection.kind == .electronFlow && coordinator.isCommandSupported("selection.replan")
         let supportsToggleBond = ready && selection.count == 1 && selection.kind == .electronFlow && coordinator.isCommandSupported("selection.toggleBondComponent")
@@ -872,30 +1065,50 @@ final class WorkspacePropertiesViewController: NSViewController {
                     row.widthAnchor.constraint(equalTo: propertiesStack.widthAnchor).isActive = true
 
                 case .text:
-                    let fieldView = WorkspaceCommitTextFieldView(
-                        property: prop,
-                        selectionRevision: revision,
-                        selectionRevisionProvider: { [weak self] in self?.coordinator.uiState.selection.revision ?? 0 },
-                        onCommitValue: { [weak self] propId, str, expectedRev in
-                            self?.coordinator.commitSelectionProperty(
-                                propertyId: propId,
-                                value: .string(str),
-                                expectedSelectionRevision: expectedRev
-                            )
-                        },
-                        onRestoreCanvasFocus: { [weak self] in
-                            self?.onRestoreCanvasFocus?()
-                        }
-                    )
-                    textFieldViewsById[prop.id] = fieldView
-                    propertiesStack.addArrangedSubview(fieldView)
-                    fieldView.widthAnchor.constraint(equalTo: propertiesStack.widthAnchor).isActive = true
+                    if ["stroke.color", "fillColor", "shapeStyle.stroke.color", "shapeStyle.fillColor"].contains(prop.id) {
+                        let colorView = WorkspaceCommitColorWellView(
+                            property: prop,
+                            selectionRevision: revision,
+                            selectionRevisionProvider: { [weak self] in self?.coordinator.uiState.selection.revision ?? 0 },
+                            onCommitValue: { [weak self] propId, str, expectedRev in
+                                self?.coordinator.commitSelectionProperty(
+                                    propertyId: propId,
+                                    value: .string(str),
+                                    expectedSelectionRevision: expectedRev
+                                )
+                            },
+                            onRestoreCanvasFocus: { [weak self] in self?.onRestoreCanvasFocus?() }
+                        )
+                        colorWellViewsById[prop.id] = colorView
+                        propertiesStack.addArrangedSubview(colorView)
+                        colorView.widthAnchor.constraint(equalTo: propertiesStack.widthAnchor).isActive = true
+                    } else {
+                        let fieldView = WorkspaceCommitTextFieldView(
+                            property: prop,
+                            selectionRevision: revision,
+                            selectionRevisionProvider: { [weak self] in self?.coordinator.uiState.selection.revision ?? 0 },
+                            onCommitValue: { [weak self] propId, str, expectedRev in
+                                self?.coordinator.commitSelectionProperty(
+                                    propertyId: propId,
+                                    value: .string(str),
+                                    expectedSelectionRevision: expectedRev
+                                )
+                            },
+                            onRestoreCanvasFocus: { [weak self] in
+                                self?.onRestoreCanvasFocus?()
+                            }
+                        )
+                        textFieldViewsById[prop.id] = fieldView
+                        propertiesStack.addArrangedSubview(fieldView)
+                        fieldView.widthAnchor.constraint(equalTo: propertiesStack.widthAnchor).isActive = true
+                    }
                 }
             }
         } else {
             for prop in properties {
                 sliderViewsById[prop.id]?.applyProperty(prop, selectionRevision: revision)
                 textFieldViewsById[prop.id]?.applyProperty(prop, selectionRevision: revision)
+                colorWellViewsById[prop.id]?.applyProperty(prop, selectionRevision: revision)
                 if let popup = choicePopupsById[prop.id] {
                     popup.isEnabled = prop.enabled
                     if let selectedId = prop.value?.stringValue,
@@ -912,8 +1125,10 @@ final class WorkspacePropertiesViewController: NSViewController {
     private func clearRenderedProperties() {
         sliderViewsById.values.forEach { $0.cancelInteraction() }
         textFieldViewsById.values.forEach { $0.cancelPendingEdit() }
+        colorWellViewsById.values.forEach { $0.cancelInteraction() }
         sliderViewsById.removeAll()
         textFieldViewsById.removeAll()
+        colorWellViewsById.removeAll()
         choicePopupsById.removeAll()
         renderedPropertyIds.removeAll()
         propertiesStack.arrangedSubviews.forEach {
@@ -1002,6 +1217,10 @@ final class WorkspaceInspectorViewController: NSViewController {
 
     private(set) var selectedTab: WorkspaceInspectorTab = .agent
     var onSelectedTabChanged: ((WorkspaceInspectorTab) -> Void)?
+
+    var hasActiveOwnedColorPickerSession: Bool {
+        propertiesViewController.hasActiveOwnedColorPickerSession
+    }
 
     let segmentedControl = NSSegmentedControl(labels: ["属性", "AI 助手"], trackingMode: .selectOne, target: nil, action: nil)
     private let containerView = NSView()

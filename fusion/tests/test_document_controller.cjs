@@ -344,3 +344,50 @@ test('paper panning moves only the surround and notifies on page crossings even 
   assert.equal(JSON.stringify(c.state), before); assert.equal(f.history(), 0);
   dom.window.close();
 });
+
+test('read-only draft snapshots preserve the editor, document state and undo history', () => {
+  const f = fixture(), before = f.c.capture(); let removed = 0;
+  const div = { innerText: 'updated 中文', remove() { removed++; } };
+  f.c.editor = { id: 'obj-note', div, before, composing: false };
+  f.c.editorPxPerPt = () => 1;
+  const modelBefore = JSON.stringify(f.c.getState()), editor = f.c.editor;
+  const first = f.c.export({ preserveTextEditing: true });
+  const second = f.c.export({ preserveTextEditing: true });
+  assert.equal(first.objects.find(o => o.id === 'obj-note').rich.text, 'updated 中文');
+  assert.deepEqual(first, second);
+  assert.equal(JSON.stringify(f.c.getState()), modelBefore);
+  assert.equal(f.c.editor, editor); assert.equal(removed, 0); assert.equal(f.history(), 0);
+  first.objects[0].rich.text = 'snapshot is detached';
+  assert.equal(f.c.object('obj-note').rich.text, 'note');
+  f.c.finishTextEdit();
+  assert.equal(f.c.object('obj-note').rich.text, 'updated 中文');
+  assert.equal(removed, 1); assert.equal(f.history(), 1);
+  f.undo(); assert.equal(f.c.object('obj-note').rich.text, 'note');
+  f.redo(); assert.equal(f.c.object('obj-note').rich.text, 'updated 中文');
+});
+
+test('read-only snapshots reject IME composition without scheduling a later editor close', () => {
+  const f = fixture(), editor = { composing: true };
+  f.c.editor = editor;
+  assert.throws(() => f.c.export({ preserveTextEditing: true }), /输入法/);
+  assert.equal(f.c.editor, editor); assert.equal(editor.pendingFinish, undefined);
+  assert.equal(f.history(), 0);
+});
+
+test('cancelling a text session discards its draft without reading incomplete editor DOM', () => {
+  const f = fixture(); let removed = false;
+  f.c.editor = { id: 'obj-note', composing: true, div: { get innerText() { throw Error('must not read cancelled composition'); }, remove() { removed = true; } } };
+  assert.equal(f.c.finishTextEdit(true), true);
+  assert.equal(f.c.editor, null); assert.equal(removed, true);
+  assert.equal(f.c.object('obj-note').rich.text, 'note'); assert.equal(f.history(), 0);
+});
+
+test('cancelling a text session restores staged formatting and draft text without an undo entry', () => {
+  const f = fixture(), original = JSON.parse(JSON.stringify(f.c.object('obj-note'))), before = f.c.capture();
+  f.c.object('obj-note').rich = { text: 'note draft', color: '#ff0000', align: 'center', runs: [{ start: 0, end: 4, fontSize: 24 }] };
+  f.c.object('obj-note').h = 12;
+  f.c.editor = { id: 'obj-note', before, composing: false, div: { remove() {} } };
+  assert.equal(f.c.finishTextEdit(true), true);
+  assert.deepEqual(f.c.object('obj-note'), original);
+  assert.equal(f.history(), 0);
+});

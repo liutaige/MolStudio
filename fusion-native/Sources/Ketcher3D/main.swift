@@ -214,6 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     var canvasSession = CanvasSession()
     private var documentPDFExporter: DocumentPDFExporter?
     private var documentPDFExportInFlight = false
+    private var cleanLayoutInFlight = false
+    private var cleanLayoutRequestGeneration = 0
     private var thumbnailGeneration = 0
     var navigationGeneration = 1     // 每次 web.load 递增；旧导航的回调凭序号作废
     var openRequestGeneration = 0    // 打开意图：后发打开/取消/新建/关闭/退出撤销旧请求
@@ -2151,6 +2153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         openRequestGeneration += 1
         // 先隔离旧页面并作废在途回调，不能让迟到的轮询/注入重新提交已丢弃的内容。
         navigationGeneration += 1
+        invalidateCleanLayoutRequest()
         workspaceAttachFallbackGeneration = nil
         navigationInFlight = false
         pageUsable = false
@@ -2350,6 +2353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     private func startNavigation(to target: SessionMode, pending: PendingPayload) {
         openRequestGeneration += 1
         navigationGeneration += 1
+        invalidateCleanLayoutRequest()
         // Register the new generation with the coordinator BEFORE any load so
         // late callbacks from the previous epoch cannot be replayed onto the
         // new page. The opaque cover goes up in the same synchronous turn.
@@ -2430,6 +2434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         pageUsable = false
         pageQuarantined = true
         navigationGeneration += 1
+        invalidateCleanLayoutRequest()
         cancelNavigationWatchdog()
         if wasInFlight {
             pendingPayload = .none      // 丢掉未消费的注入任务，避免迟到的 didFinish 再套用旧 pending
@@ -3460,16 +3465,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     /// 结构 → 清理结构（⌘⇧K）：与顶部 Layout、⌘L 走同一套整理逻辑，
     /// 不再把整张画布导出 MOL 再整体替换（那会丢选区、丢画布内容、丢历史）。
     @objc func actClean() {
+        guard !cleanLayoutInFlight else { return }
+        cleanLayoutInFlight = true
+        cleanLayoutRequestGeneration += 1
+        let requestGeneration = cleanLayoutRequestGeneration
         let gen = navigationGeneration
         setStatus("整理结构中…")
+        workspaceSplitVC?.canvasHostViewController.showCanvasFeedback(message: "正在整理结构…")
         jsValue("return await window.k3dAPI.cleanLayout()") { value, ok in
+            defer {
+                if self.cleanLayoutRequestGeneration == requestGeneration {
+                    self.cleanLayoutInFlight = false
+                }
+            }
             guard gen == self.navigationGeneration else { return }
             guard ok, let r = value as? [String: Any] else {
                 self.setStatus("")
+                self.workspaceSplitVC?.canvasHostViewController.showCanvasFeedback(message: "无法读取画布内容，本次整理未应用。")
                 return self.alert("整理未应用", "无法读取画布内容，本次整理未应用。")
             }
             self.reportLayoutResult(r)
         }
+    }
+
+    private func invalidateCleanLayoutRequest() {
+        cleanLayoutRequestGeneration += 1
+        cleanLayoutInFlight = false
     }
 
     /// 整理结果统一提示（原生菜单与顶部按钮共用同一套文案规则）
@@ -3478,9 +3499,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         let message = (r["message"] as? String) ?? ""
         let code = (r["code"] as? String) ?? ""
         if success {
-            setStatus(message.isEmpty ? "结构已整理" : message)
+            let unchanged = (r["unchanged"] as? Bool) ?? false
+            let feedback = message.isEmpty
+                ? (unchanged ? "结构已整齐，位置与画法保持不变" : "结构已整理")
+                : message
+            workspaceSplitVC?.canvasHostViewController.showCanvasFeedback(message: feedback)
+            setStatus(feedback)
             return
         }
+        let feedback = message.isEmpty ? "本次整理未完成，原图未修改。" : message
+        workspaceSplitVC?.canvasHostViewController.showCanvasFeedback(message: feedback)
         setStatus("")
         if code == "no_molecule" {
             alert("请选择要整理的分子", message.isEmpty ? "先选中一个分子再整理。" : message)

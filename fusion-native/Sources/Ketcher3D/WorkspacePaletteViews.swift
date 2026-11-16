@@ -50,6 +50,11 @@ final class WorkspaceOverlayContainerView: NSView {
     }
 }
 
+/// Full-size host overlay whose hit testing always passes through to canvas chrome/content below.
+final class WorkspaceCanvasFeedbackOverlayView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Interactive button inside the floating chemical tool palette with variant indicator and active highlight.
 final class WorkspaceToolPaletteButton: NSButton {
     let slot: WorkspaceToolSlot
@@ -175,6 +180,7 @@ final class WorkspaceToolPaletteView: NSView {
     /// Host-driven native image insertion (NSOpenPanel → document.addImage).
     /// There is no web-toolbar fallback any more.
     var onInsertImageRequested: (() -> Void)?
+    var onShapeStyleRequested: (() -> Void)?
 
     private(set) var isDoubleColumn: Bool = true
     private let rootStack = NSStackView()
@@ -183,6 +189,7 @@ final class WorkspaceToolPaletteView: NSView {
 
     private(set) var toolButtons: [WorkspaceToolPaletteButton] = []
     private let variantMenu = NSMenu(title: "工具变体")
+    private static let styledShapeTools: Set<String> = ["shape.rect", "shape.ellipse", "shape.line", "document.roundRect", "document.polygon", "document.arrow", "document.bracket"]
 
     /// Ordered v1 product sections mirroring `design-demos/macos-workbench/index.html` and contract v1.
     static let sections: [(title: String, slots: [WorkspaceToolSlot])] = [
@@ -254,7 +261,9 @@ final class WorkspaceToolPaletteView: NSView {
         (
             "插入",
             [
+                WorkspaceToolSlot(id: "document.text", title: "文本框"),
                 WorkspaceToolSlot(id: "text", title: "文本标签"),
+                WorkspaceToolSlot(id: "insert.view3d", title: "3D 分子预览"),
                 WorkspaceToolSlot(id: "document.bracket", title: "方括号 / 聚合"),
                 WorkspaceToolSlot(id: "document.image", title: "插入图片…"),
                 WorkspaceToolSlot(
@@ -269,7 +278,6 @@ final class WorkspaceToolPaletteView: NSView {
                         .init(id: "document.arrow", title: "普通箭头", isTemplate: false),
                     ]
                 ),
-                WorkspaceToolSlot(id: "ketcher.image", title: "Ketcher 图片工具"),
             ]
         ),
     ]
@@ -453,13 +461,16 @@ final class WorkspaceToolPaletteView: NSView {
         if variant.isTemplate {
             coordinator.selectTemplate(id: variant.id)
         } else {
-            coordinator.selectTool(id: variant.id) { result in
+            coordinator.selectTool(id: variant.id) { [weak self] result in
                 if case .success(let reply) = result, !reply.ok, let message = reply.error?.message {
                     let alert = NSAlert()
                     alert.messageText = variant.title
                     alert.informativeText = message
                     alert.addButton(withTitle: "好")
                     alert.runModal()
+                }
+                if case .success(let reply) = result, reply.ok, Self.styledShapeTools.contains(variant.id) {
+                    self?.onShapeStyleRequested?()
                 }
             }
         }
@@ -494,7 +505,11 @@ final class WorkspaceToolPaletteView: NSView {
         if variant.isTemplate {
             coordinator.selectTemplate(id: variant.id)
         } else {
-            coordinator.selectTool(id: variant.id)
+            coordinator.selectTool(id: variant.id) { [weak self] result in
+                if case .success(let reply) = result, reply.ok, Self.styledShapeTools.contains(variant.id) {
+                    self?.onShapeStyleRequested?()
+                }
+            }
         }
         onRestoreCanvasFocus?()
     }
@@ -812,12 +827,19 @@ final class WorkspaceCanvasHostViewController: NSViewController {
     private let navigationWelcomeButton = NSButton(title: "返回欢迎页", target: nil, action: nil)
     private let navigationSaveButton = NSButton(title: "保存内存中内容…", target: nil, action: nil)
     private let navigationProgress = NSProgressIndicator()
+    let canvasFeedbackOverlayView = WorkspaceCanvasFeedbackOverlayView()
+    private let canvasFeedbackBox = NSBox()
+    private let canvasFeedbackLabel = NSTextField(labelWithString: "")
+    private var canvasFeedbackHideWorkItem: DispatchWorkItem?
+    private var canvasFeedbackGeneration = 0
+    private(set) var currentCanvasFeedbackMessage: String?
     var onRetryNavigation: (() -> Void)?
     var onReturnToWelcome: (() -> Void)?
     var onSaveInMemorySnapshot: (() -> Void)?
     /// Forwarded to the host for native popovers / panels. The floating views
     /// never construct their own document or history state.
     var onInsertImageRequested: (() -> Void)?
+    var onShapeStyleRequested: (() -> Void)?
     var onPeriodicTableRequested: ((NSView) -> Void)?
     var onMoreTemplatesRequested: ((NSView) -> Void)?
     var onPropertiesRequested: ((NSView) -> Void)?
@@ -874,6 +896,7 @@ final class WorkspaceCanvasHostViewController: NSViewController {
     func setNavigationCoverVisible(_ visible: Bool) {
         coverVisible = visible
         if visible {
+            clearCanvasFeedback()
             navigationCoverLabel.stringValue = "正在打开画布…"
             navigationDetailLabel.stringValue = ""
             navigationProgress.startAnimation(nil)
@@ -885,12 +908,51 @@ final class WorkspaceCanvasHostViewController: NSViewController {
         syncPaletteVisibility()
     }
 
+    /// Show a short native result message without changing focus, document state, or canvas viewport geometry.
+    func showCanvasFeedback(message: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.showCanvasFeedback(message: message) }
+            return
+        }
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedMessage.isEmpty else {
+            clearCanvasFeedback()
+            return
+        }
+        if !isViewLoaded { _ = view }
+
+        canvasFeedbackHideWorkItem?.cancel()
+        canvasFeedbackGeneration += 1
+        let generation = canvasFeedbackGeneration
+        currentCanvasFeedbackMessage = trimmedMessage
+        canvasFeedbackLabel.stringValue = trimmedMessage
+        canvasFeedbackOverlayView.isHidden = false
+
+        let hideWorkItem = DispatchWorkItem { [weak self] in
+            guard let self, self.canvasFeedbackGeneration == generation else { return }
+            self.canvasFeedbackHideWorkItem = nil
+            self.currentCanvasFeedbackMessage = nil
+            self.canvasFeedbackOverlayView.isHidden = true
+        }
+        canvasFeedbackHideWorkItem = hideWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: hideWorkItem)
+    }
+
+    private func clearCanvasFeedback() {
+        canvasFeedbackHideWorkItem?.cancel()
+        canvasFeedbackHideWorkItem = nil
+        canvasFeedbackGeneration += 1
+        currentCanvasFeedbackMessage = nil
+        canvasFeedbackOverlayView.isHidden = true
+    }
+
     var isNavigationLoading: Bool { !navigationCoverView.isHidden && navigationRetryButton.isHidden }
 
     /// Native error state: an actionable message, never an unlabelled blank
     /// canvas and never the retired web toolbar. Document bytes stay in the
     /// in-memory snapshot, so Save / Close / Quit still work.
     func showNavigationFailure(reason: String? = nil, canSave: Bool = true) {
+        clearCanvasFeedback()
         navigationCoverLabel.stringValue = "画布未能载入"
         navigationDetailLabel.stringValue = reason ?? "编辑器没有完成接管。当前内容仍保存在内存中，可重新载入或返回欢迎页。"
         navigationProgress.stopAnimation(nil)
@@ -1037,6 +1099,26 @@ final class WorkspaceCanvasHostViewController: NSViewController {
         root.addSubview(backdropView)
         root.addSubview(canvasSlotView)
         root.addSubview(glassGroupView)
+        root.addSubview(canvasFeedbackOverlayView)
+
+        canvasFeedbackOverlayView.isHidden = true
+        canvasFeedbackOverlayView.translatesAutoresizingMaskIntoConstraints = false
+        canvasFeedbackBox.boxType = .custom
+        canvasFeedbackBox.borderWidth = 1
+        canvasFeedbackBox.cornerRadius = 12
+        canvasFeedbackBox.fillColor = NSColor.controlBackgroundColor.withAlphaComponent(0.96)
+        canvasFeedbackBox.borderColor = .separatorColor
+        canvasFeedbackBox.translatesAutoresizingMaskIntoConstraints = false
+        canvasFeedbackOverlayView.addSubview(canvasFeedbackBox)
+        canvasFeedbackLabel.textColor = .labelColor
+        canvasFeedbackLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        canvasFeedbackLabel.alignment = .center
+        canvasFeedbackLabel.lineBreakMode = .byWordWrapping
+        canvasFeedbackLabel.maximumNumberOfLines = 3
+        canvasFeedbackLabel.usesSingleLineMode = false
+        canvasFeedbackLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        canvasFeedbackLabel.translatesAutoresizingMaskIntoConstraints = false
+        canvasFeedbackBox.addSubview(canvasFeedbackLabel)
 
         navigationCoverView.boxType = .custom
         navigationCoverView.borderType = .noBorder
@@ -1090,6 +1172,7 @@ final class WorkspaceCanvasHostViewController: NSViewController {
             WorkspaceFocusRouter.restoreCanvasFocusIfSafe(in: self.view.window, canvasView: self.canvasContentView)
         }
         toolPaletteView.onInsertImageRequested = { [weak self] in self?.onInsertImageRequested?() }
+        toolPaletteView.onShapeStyleRequested = { [weak self] in self?.onShapeStyleRequested?() }
         zoomOverlayView.anchorPointProvider = { [weak self] in
             guard let self else { return nil }
             let target = self.canvasContentView ?? self.canvasSlotView
@@ -1149,6 +1232,21 @@ final class WorkspaceCanvasHostViewController: NSViewController {
             overlayContainerView.trailingAnchor.constraint(equalTo: glassGroupView.contentView.trailingAnchor),
             overlayContainerView.topAnchor.constraint(equalTo: glassGroupView.contentView.topAnchor),
             overlayContainerView.bottomAnchor.constraint(equalTo: glassGroupView.contentView.bottomAnchor),
+
+            canvasFeedbackOverlayView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            canvasFeedbackOverlayView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            canvasFeedbackOverlayView.topAnchor.constraint(equalTo: root.topAnchor),
+            canvasFeedbackOverlayView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            canvasFeedbackBox.centerXAnchor.constraint(equalTo: canvasFeedbackOverlayView.centerXAnchor),
+            canvasFeedbackBox.bottomAnchor.constraint(equalTo: zoomOverlayView.topAnchor, constant: -14),
+            canvasFeedbackBox.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            canvasFeedbackBox.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
+            canvasFeedbackBox.widthAnchor.constraint(lessThanOrEqualTo: canvasFeedbackOverlayView.widthAnchor, constant: -32),
+            canvasFeedbackBox.heightAnchor.constraint(greaterThanOrEqualToConstant: 52),
+            canvasFeedbackLabel.leadingAnchor.constraint(equalTo: canvasFeedbackBox.leadingAnchor, constant: 16),
+            canvasFeedbackLabel.trailingAnchor.constraint(equalTo: canvasFeedbackBox.trailingAnchor, constant: -16),
+            canvasFeedbackLabel.topAnchor.constraint(equalTo: canvasFeedbackBox.topAnchor, constant: 9),
+            canvasFeedbackLabel.bottomAnchor.constraint(equalTo: canvasFeedbackBox.bottomAnchor, constant: -9),
 
             toolPaletteView.leadingAnchor.constraint(equalTo: root.safeAreaLayoutGuide.leadingAnchor, constant: 14),
             toolPaletteView.topAnchor.constraint(greaterThanOrEqualTo: root.safeAreaLayoutGuide.topAnchor, constant: 14),

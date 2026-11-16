@@ -133,6 +133,7 @@ MISSING=""
 for f in \
   "$ROOT/fusion/server.py" \
   "$ROOT/fusion/stereo.py" \
+  "$ROOT/fusion/conservative_layout.py" \
   "$ROOT/fusion/inorganic.py" \
   "$ROOT/fusion/agent_gateway.py" \
   "$ROOT/fusion/agent_external_bridge.py" \
@@ -171,7 +172,7 @@ rm -rf "$RES/python/lib/python3.12/site-packages/pip" \
 rm -f "$RES/python/bin/pip" "$RES/python/bin/pip3" "$RES/python/bin/pip3.12"
 env -u PYTHONHOME -u PYTHONPATH "$RES/python/bin/python" -I -B -c \
   'from rdkit import Chem; from rdkit.Chem import AllChem, rdCoordGen; m = Chem.MolFromSmiles("CCO"); rdCoordGen.AddCoords(m); assert m.GetNumConformers() == 1; assert AllChem.EmbedMolecule(Chem.AddHs(m), randomSeed=42) == 0'
-for f in server.py stereo.py inorganic.py agent_gateway.py agent_external_bridge.py mcp_server.py mcp_response.py canvas.html help.html threed.html; do
+for f in server.py stereo.py conservative_layout.py inorganic.py agent_gateway.py agent_external_bridge.py mcp_server.py mcp_response.py canvas.html help.html threed.html; do
   cp "$ROOT/fusion/$f" "$RES/$f"
 done
 # 欢迎页「打开示例」：随包分发已验收的机理夹具（源文件唯一，构建时改名）

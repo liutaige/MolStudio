@@ -233,7 +233,7 @@ test('extended document properties commit once with selection revision', async (
   await attach(bridge);
   const state = bridge.getState();
   const props = state.selection.properties;
-  for (const id of ['stroke.color', 'stroke.width', 'stroke.dash', 'fill',
+  for (const id of ['stroke.color', 'stroke.width', 'stroke.dash', 'fill.mode', 'fillColor', 'cornerRadius',
     'action.duplicate', 'action.delete']) assert.ok(props.some(p => p.id === id), 'missing ' + id);
   const r = await command(bridge, 'selection.setProperty',
     { propertyId: 'stroke.color', value: '#ff0000' },
@@ -245,6 +245,18 @@ test('extended document properties commit once with selection revision', async (
   assert.equal(stale.ok, false);
   assert.equal(stale.error.code, 'stale_selection');
   assert.equal(docObject.stroke.width, 0.05, 'stale commit must not mutate');
+});
+
+test('legacy fill command updates the visible fill colour as well as fill mode', async () => {
+  const { bridge, calls } = setup({ active: true });
+  await attach(bridge);
+  const state = bridge.getState();
+  const reply = await command(bridge, 'selection.setProperty',
+    { propertyId: 'fill', value: '#ff0000' },
+    { expectedSelectionRevision: state.selection.revision });
+  assert.equal(reply.ok, true, JSON.stringify(reply.error));
+  assert.equal(calls.updateObject.at(-1)[1].fill, '#ff0000');
+  assert.equal(calls.updateObject.at(-1)[1].fillColor, '#ff0000');
 });
 
 test('text object surfaces rich-text fields and commits real values', async () => {

@@ -183,7 +183,7 @@
     const model = S.model;
     const controller = S.controller;
 
-    api.selectAll = function () { return S.documentController ? S.documentController.selectAll() : controller.selectAll(); };
+    api.selectAll = function () { return S.documentController?.editor ? S.documentController.textCommand('selectAll') : S.documentController ? S.documentController.selectAll() : controller.selectAll(); };
     const documentAPI = {};
     for (const name of ['init', 'getState', 'getSelection', 'getActivePage', 'setPageSetup', 'addPage', 'removePage', 'addText', 'addShape', 'addImage', 'updateObject', 'select', 'selectAll', 'moveSelection', 'deleteSelection', 'duplicateSelection', 'importFile', 'setTool', 'editText', 'finishTextEdit', 'fitPage', 'fitWidth', 'scrollToPage', 'getPaperZoom', 'setPaperZoom', 'setPaperViewportInsets', 'modelToClient', 'exportPages', 'previewPages']) {
       documentAPI[name] = (...args) => S.documentController[name](...args);
@@ -214,7 +214,7 @@
           ket: ex.ket,
           bindings: ex.bindings,
           mechanism: model.state,
-          document: S.documentController?.export(),
+          document: S.documentController?.export({ preserveTextEditing: true }),
           reactionSteps: S.reactionSteps?.export(ex.ket),
           reactionStepOperations: S.reactionSteps?.exportOperations?.(),
           agentTask: S.agentTask?.export()

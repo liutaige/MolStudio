@@ -724,6 +724,8 @@
       if (!finite(ar.geometry.bend)) ar.geometry.bend = 0;
       if (ar.geometry.mode !== 'auto' && ar.geometry.mode !== 'manual') ar.geometry.mode = 'manual';
       if (!Number.isInteger(ar.geometry.routeVersion) || ar.geometry.routeVersion < 0) ar.geometry.routeVersion = 0;
+      // 缩放因子缺省为 1：旧文件与旧内存快照外观不变
+      if (!finite(ar.scale) || ar.scale <= 0 || ar.scale > 100) ar.scale = 1;
     }
     return out;
   }
@@ -752,7 +754,9 @@
           : (mode === 'auto' ? ROUTE_VERSION : 0)
       },
       stepId: o.stepId || DEFAULT_STEP,
-      pairId: o.pairId || null
+      pairId: o.pairId || null,
+      // 所属分子缩放因子（纸页实际尺寸缩放）：视觉线宽/箭头头随因子放大
+      scale: finite(o.scale) && o.scale > 0 && o.scale <= 100 ? o.scale : 1
     };
   }
 
@@ -805,6 +809,9 @@
         errs.push('箭头 ' + ar.id + ' 的 geometry.controlFrame 非法');
       }
       if (typeof ar.stepId !== 'string') errs.push('箭头 ' + ar.id + ' 缺少 stepId');
+      if (ar.scale !== undefined && (!finite(ar.scale) || ar.scale <= 0 || ar.scale > 100)) {
+        errs.push('箭头 ' + ar.id + ' 的 scale 必须是大于 0 且不超过 100 的有限数');
+      }
     }
     if (mech.steps !== undefined) {
       if (!Array.isArray(mech.steps)) errs.push('mechanism.steps 必须是数组');
@@ -847,7 +854,8 @@
         routeVersion: Number.isInteger(ar.geometry.routeVersion) ? ar.geometry.routeVersion : 0
       },
       stepId: ar.stepId || DEFAULT_STEP,
-      pairId: ar.pairId || null
+      pairId: ar.pairId || null,
+      scale: finite(ar.scale) && ar.scale > 0 ? round(ar.scale) : 1
     }));
     const steps = (mech.steps || []).map(s => ({ id: s.id, label: s.label }));
     return { lonePairs: lps, arrows: arrows, steps: steps };

@@ -186,14 +186,20 @@
       if (arrows.length) kinds.add('electronFlow');
       if (lonePairs.length) kinds.add('lonePair');
       if (molecules) kinds.add('molecule');
+      // Mechanism-layer ids that resolve to neither arrows nor lone pairs are
+      // chemistry content (molecules), so the inspector labels them as such
+      // instead of a generic "N objects" that collides with document objects.
+      if (!arrows.length && !lonePairs.length && !docObjects.length && mechIds.length) kinds.add('molecule');
       if (docObjects.length) kinds.add('document');
       kind = kinds.size > 1 ? 'mixed' : (kinds.values().next().value || 'mixed');
     }
-    const properties = this.selectionProperties({ arrows, lonePairs, docObjects });
-    const label = !count ? '' : kind === 'electronFlow' && arrows.length === 1 ? '电子流弯箭头'
+    const properties = this.selectionProperties({ arrows, lonePairs, docObjects, selectionCount: count });
+    const activeShapeTool = documentController && ['rect', 'roundRect', 'ellipse', 'line', 'arrow', 'polygon', 'bracket'].includes(documentController.tool);
+    const label = !count ? (activeShapeTool ? '形状样式' : '') : kind === 'electronFlow' && arrows.length === 1 ? '电子流弯箭头'
       : kind === 'lonePair' && lonePairs.length === 1 ? '孤对电子'
         : kind === 'document' && docObjects.length === 1 ? '文档对象'
-          : kind === 'molecule' && count === 1 ? '分子结构' : '已选 ' + count + ' 个对象';
+          : kind === 'molecule' && count === 1 ? '分子结构'
+        : kind === 'molecule' ? '所选化学内容' : '已选 ' + count + ' 个对象';
     return { revision: this.selectionRevision, kind, count, label, properties };
   };
 
@@ -201,6 +207,11 @@
   NativeUIBridge.prototype.selectionProperties = function (parts) {
     const out = [];
     const { arrows, docObjects } = parts;
+    const choice = (id, label, value, choices) => out.push({ id, label, type: 'choice', value, enabled: true, choices });
+    const numeric = (id, label, value, min, max, step) => {
+      if (Number.isFinite(Number(value))) out.push({ id, label, type: 'number', value: Number(value), enabled: true, min, max, step });
+    };
+    const text = (id, label, value) => out.push({ id, label, type: 'text', value: String(value == null ? '' : value), enabled: true });
     if (arrows.length === 1) {
       const ar = arrows[0];
       out.push({ id: 'bend', label: '曲率', type: 'number', value: Number(ar.geometry.bend.toFixed(2)), enabled: true, min: -2.4, max: 2.4, step: 0.02 });
@@ -226,11 +237,6 @@
       });
       // Real editable document-object fields, surfaced to the native inspector
       // through the same selection.setProperty contract (one undo per commit).
-      const choice = (id, label, value, choices) => out.push({ id, label, type: 'choice', value, enabled: true, choices });
-      const numeric = (id, label, value, min, max, step) => {
-        if (Number.isFinite(Number(value))) out.push({ id, label, type: 'number', value: Number(value), enabled: true, min, max, step });
-      };
-      const text = (id, label, value) => out.push({ id, label, type: 'text', value: String(value == null ? '' : value), enabled: true });
       if (o.kind === 'text') {
         const r = o.rich || {};
         text('rich.text', '文字内容', r.text || '');
@@ -246,10 +252,20 @@
         choice('rich.italic', '斜体', r.italic ? 'true' : 'false', [{ value: 'true', label: '是' }, { value: 'false', label: '否' }]);
         choice('rich.align', '对齐', r.align || 'left', [{ value: 'left', label: '左' }, { value: 'center', label: '中' }, { value: 'right', label: '右' }]);
       } else if (o.kind === 'shape') {
-        text('stroke.color', '描边颜色 (#RRGGBB)', (o.stroke && o.stroke.color) || '#3b5665');
-        numeric('stroke.width', '线宽', (o.stroke && o.stroke.width) || 0.05, 0.005, 5, 0.01);
+        const dc = this.app() && this.app().documentController;
+        const unit = Number(dc && dc.state && dc.state.ptPerBond) > 0 ? Number(dc.state.ptPerBond) : 14.4;
+        text('stroke.color', '描边颜色', (o.stroke && o.stroke.color) || '#3b5665');
+        numeric('stroke.width', '边框宽度 (pt)', ((o.stroke && o.stroke.width) || 0.05) * unit, 0.1, 72, 0.1);
         choice('stroke.dash', '线型', (o.stroke && o.stroke.dash) || 'solid', [{ value: 'solid', label: '实线' }, { value: 'dashed', label: '虚线' }]);
-        text('fill', '填充颜色 (none 或 #RRGGBB)', o.fill === 'none' ? 'none' : (o.fill || 'none'));
+        if (!['line', 'arrow', 'bracket'].includes(o.shape)) {
+          const fill = o.fill && o.fill !== 'none' ? o.fill : 'none';
+          choice('fill.mode', '填充', fill === 'none' ? 'none' : 'filled', [{ value: 'filled', label: '有填充' }, { value: 'none', label: '无填充' }]);
+          text('fillColor', '填充颜色', o.fillColor || (fill === 'none' ? '#ffffff' : fill));
+        }
+        if (o.shape === 'rect' || o.shape === 'roundRect') {
+          const radius = Number.isFinite(o.cornerRadius) ? o.cornerRadius : o.shape === 'roundRect' ? Math.min(0.5, o.h / 4) : 0;
+          numeric('cornerRadius', '圆角半径 (pt)', radius * unit, 0, Math.min(o.w, o.h) / 2 * unit, 0.1);
+        }
       } else if (o.kind === 'image') {
         const crop = o.crop || { x: 0, y: 0, w: 1, h: 1 };
         for (const [key, label] of [['x', '裁剪 X'], ['y', '裁剪 Y'], ['w', '裁剪宽'], ['h', '裁剪高']]) {
@@ -266,6 +282,45 @@
       if (o.kind === 'text') out.push({ id: 'action.editText', label: '编辑文字', type: 'choice', value: 'run', enabled: true,
         choices: [{ value: 'run', label: '编辑' }] });
     }
+    const shapeController = this.app() && this.app().documentController;
+    const shapeTool = shapeController && ['rect', 'roundRect', 'ellipse', 'line', 'arrow', 'polygon', 'bracket'].includes(shapeController.tool) ? shapeController.tool : null;
+    if (shapeTool) {
+        const dc = shapeController;
+        const style = dc.shapeStyle || {}, stroke = style.stroke || {};
+        const unit = Number(dc.state && dc.state.ptPerBond) > 0 ? Number(dc.state.ptPerBond) : 14.4;
+        const prefix = 'shapeStyle.';
+        text(prefix + 'stroke.color', '默认描边颜色', stroke.color || '#3b5665');
+        numeric(prefix + 'stroke.width', '默认边框宽度 (pt)', (Number(stroke.width) || 0.05) * unit, 0.1, 72, 0.1);
+        choice(prefix + 'stroke.dash', '默认线型', stroke.dash || 'solid', [{ value: 'solid', label: '实线' }, { value: 'dashed', label: '虚线' }]);
+        if (!['line', 'arrow', 'bracket'].includes(shapeTool)) {
+          const fill = style.fill && style.fill !== 'none' ? style.fill : 'none';
+          choice(prefix + 'fill.mode', '默认填充', fill === 'none' ? 'none' : 'filled', [{ value: 'filled', label: '有填充' }, { value: 'none', label: '无填充' }]);
+          text(prefix + 'fillColor', '默认填充颜色', style.fillColor || (fill === 'none' ? '#ffffff' : fill));
+        }
+        if (shapeTool === 'rect' || shapeTool === 'roundRect') {
+          const radius = Number.isFinite(style.cornerRadius) ? style.cornerRadius : shapeTool === 'roundRect' ? 0.5 : 0;
+          numeric(prefix + 'cornerRadius', '默认圆角半径 (pt)', radius * unit, 0, 1000, 0.1);
+        }
+    }
+    // Selection scaling (Wave2 core): paper mode only — boundless canvas has
+    // no pages, so "actual size on paper" does not apply there. When the
+    // document layer reports a scalable chemistry selection, expose the same
+    // presets the web toolbar offers. scale.preset commits through
+    // selection.setProperty with the standard expectedSelectionRevision
+    // guard; scale.hint is a disabled read-only text row (Swift renders it as
+    // a disabled field, no commits).
+    const dc = this.app() && this.app().documentController;
+    if (dc && dc.state && dc.state.mode === 'paper' &&
+        typeof dc.hasScaleSelection === 'function' && dc.hasScaleSelection() === true) {
+      const current = typeof dc.currentSessionPercent === 'function' ? dc.currentSessionPercent() : null;
+      const presets = [['75', '75%'], ['100', '100%'], ['125', '125%'], ['150', '150%'], ['200', '200%']];
+      const raw = Number(current);
+      const value = String(Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 100);
+      out.push({ id: 'scale.preset', label: '缩放选区', type: 'choice', value, enabled: true,
+        choices: presets.map(([v, l]) => ({ value: v, label: l })) });
+      out.push({ id: 'scale.hint', label: '缩放说明', type: 'text', enabled: false,
+        value: '百分比以本次操作开始时的选区为基准；应用一次产生一个撤销动作' });
+    }
     return out;
   };
 
@@ -273,8 +328,11 @@
     const app = this.app();
     const controller = app && app.controller;
     const documentController = app && app.documentController;
-    if (documentController && documentController.active && documentController.tool && documentController.tool !== 'select') {
-      return { id: 'document.' + documentController.tool, label: '文档工具' };
+    if (documentController && documentController.tool && documentController.tool !== 'select') {
+      const ids = { rect: 'shape.rect', ellipse: 'shape.ellipse', line: 'shape.line', roundRect: 'document.roundRect',
+        arrow: 'document.arrow', polygon: 'document.polygon', bracket: 'document.bracket', text: 'document.text' };
+      const labels = { rect: '矩形', ellipse: '椭圆', line: '直线', roundRect: '圆角矩形', arrow: '普通箭头', polygon: '三角形', bracket: '方括号', text: '文本框' };
+      return { id: ids[documentController.tool] || 'document.' + documentController.tool, label: labels[documentController.tool] || '文档工具' };
     }
     if (controller && controller.tool && controller.tool !== 'select') {
       // Report palette product ids so the native tool palette can highlight
@@ -556,7 +614,8 @@
         'electronPairArrow', 'fishhookArrow', 'lonePair',
         'shape.rect', 'shape.ellipse', 'shape.line',
         'document.bracket', 'document.arrow', 'document.polygon', 'document.roundRect',
-        'document.image', 'ketcher.image'
+        'document.text',
+        'document.image', 'insert.view3d', 'ketcher.image'
       ],
       elementSymbols: Array.from(ELEMENTS),
       templateIds: templates.map(t => t.productId)
@@ -621,6 +680,10 @@
       inspectorVisible: !!(o.host && o.host.inspectorVisible)
     };
     this.installObservers();
+    // Native-only dialog fallbacks for the 3D preview core layer. Attached
+    // only after a successful attach; detach restores the previous hooks so
+    // pure-browser mode is never affected.
+    this.installMolecule3DDialogs();
     if (owned.includes('toolPalette') || owned.includes('zoomPalette') || owned.includes('inspector') || owned.includes('fileCommands')) {
       this.hideWebSurfaces(owned);
     }
@@ -816,6 +879,7 @@
     this.commandReplies.clear();
     if (this._flushTimer) { clearTimeout(this._flushTimer); this._flushTimer = null; }
     this.restoreWebSurfaces();
+    this.removeMolecule3DDialogs();
     for (const fn of this._observers.splice(0)) { try { fn(); } catch (e) { /* already gone */ } }
     if (this._toolWatch) { this._toolWatch.restore(); this._toolWatch = null; }
     if (this.agentRenderer) { this.deactivateNativeAgent(); }
@@ -1237,6 +1301,20 @@
           this.markState();
           return reply(true);
         }
+        case 'document.insert3d': {
+          const dc = documentController;
+          if (!dc || typeof dc.insertMolecule3DPreview !== 'function') {
+            return reply(false, { error: { code: 'not_ready', message: '3D 分子预览层尚未就绪' } });
+          }
+          this.stopForManualEdit();
+          const result = await this.runInsertMolecule3D();
+          if (!isCurrentEpoch()) return reply(false, { error: { code: 'stale_epoch', message: 'epoch 已失效' } });
+          if (!result || result.ok !== true) {
+            if (result && result.cancelled) return reply(true, { result: { cancelled: true } });
+            return reply(false, { error: { code: 'failed', message: (result && result.error) || '插入 3D 分子预览失败' } });
+          }
+          return reply(true, { result: { id: result.id } });
+        }
         case 'document.addImage': {
           const dc = documentController;
           if (!dc) return reply(false, { error: { code: 'not_ready', message: '文档层尚未就绪' } });
@@ -1430,8 +1508,8 @@
     const resetSemanticTools = () => {
       if (controller.tool !== 'select') controller.setTool('select');
       if (documentController && documentController.tool && documentController.tool !== 'select') {
-        documentController.tool = 'select';
-        documentController.emit();
+        if (typeof documentController.setTool === 'function') documentController.setTool('select');
+        else { documentController.tool = 'select'; documentController.emit(); }
       }
     };
     if (productId === 'select') { resetSemanticTools(); ed.tool('select'); this.markState(); return true; }
@@ -1458,7 +1536,16 @@
     if (productId === 'text') { resetSemanticTools(); ed.tool('text'); this.markState(); return true; }
     if (BOND_OPTS[productId]) { resetSemanticTools(); ed.tool('bond', { ...BOND_OPTS[productId] }); this.markState(); return true; }
     if (ARROW_MODES[productId]) { resetSemanticTools(); ed.tool('reactionarrow', ARROW_MODES[productId]); this.markState(); return true; }
-    if (SHAPE_MODES[productId]) { resetSemanticTools(); ed.tool('simpleobject', SHAPE_MODES[productId]); this.markState(); return true; }
+    if (SHAPE_MODES[productId]) {
+      const shapeTools = { 'shape.rect': 'rect', 'shape.ellipse': 'ellipse', 'shape.line': 'line' };
+      if (!documentController || typeof documentController.setTool !== 'function') return { error: { code: 'not_ready', message: '文档形状层尚未就绪' } };
+      resetSemanticTools();
+      this.stopForManualEdit();
+      if (typeof documentController.select === 'function') documentController.select([]);
+      documentController.setTool(shapeTools[productId]);
+      this.markState();
+      return true;
+    }
     if (productId === 'ketcher.image') {
       // Real Ketcher image tool (IMAGE_KEY = 'images'); the native host reads
       // the file bytes itself. No hidden web toolbar button is simulated.
@@ -1470,9 +1557,24 @@
       // <input type=file> and no web-toolbar fallback.
       return { error: { code: 'invalid_arguments', message: '图片请使用 document.addImage' } };
     }
+    if (productId === 'insert.view3d') {
+      // 3D molecule preview is not a persistent canvas tool: the click keeps
+      // the current tool and triggers an async insertion (candidate picking
+      // and stereo confirmation may open dialogs). The synchronous applyTool
+      // contract cannot await a reply, so the insert runs through the shared
+      // document.insert3d path; failures surface as canvas status text.
+      const dc = documentController;
+      if (!dc || typeof dc.insertMolecule3DPreview !== 'function') {
+        return { error: { code: 'not_ready', message: '3D 分子预览层尚未就绪' } };
+      }
+      if (controller && controller.tool && controller.tool !== 'select') controller.setTool('select');
+      Promise.resolve(this.runInsertMolecule3D()).catch(() => { /* status already shown */ });
+      return true;
+    }
     if (typeof productId === 'string' && productId.startsWith('document.')) {
       // Document-layer drawing tools are real drag tools on the same canvas.
       const map = {
+        'document.text': 'text',
         'document.bracket': 'bracket', 'document.arrow': 'arrow', 'document.polygon': 'polygon',
         'document.roundRect': 'roundRect'
       };
@@ -1482,6 +1584,7 @@
       }
       if (controller.tool !== 'select') controller.setTool('select');
       this.stopForManualEdit();
+      if (tool !== 'text' && typeof documentController.select === 'function') documentController.select([]);
       documentController.setTool(tool);
       this.markState();
       return true;
@@ -1523,6 +1626,96 @@
     return true;
   };
 
+  /* Shared async 3D preview insertion. Returns the raw controller result;
+   * command replies wrap it, the fire-and-forget tool path surfaces failures
+   * via the canvas status text. */
+  NativeUIBridge.prototype.runInsertMolecule3D = async function () {
+    const app = this.app();
+    const dc = app && app.documentController;
+    if (!dc || typeof dc.insertMolecule3DPreview !== 'function') {
+      const message = '3D 分子预览层尚未就绪';
+      if (app && app.controller && typeof app.controller.status === 'function') app.controller.status(message);
+      return { ok: false, error: message };
+    }
+    let result = null;
+    try {
+      result = await dc.insertMolecule3DPreview({});
+    } catch (error) {
+      result = { ok: false, error: (error && error.message) || String(error) };
+    }
+    if (!result || result.ok !== true) {
+      if (result && result.cancelled) return result; // user declined: not an error
+      const message = (result && result.error) || '插入 3D 分子预览失败';
+      if (app.controller && typeof app.controller.status === 'function') app.controller.status(message);
+      return result || { ok: false, error: message };
+    }
+    this.noteCommittedEdit();
+    return result;
+  };
+
+  /* Native attach-only dialog hooks for the 3D preview core layer. WKWebView
+   * implements window.confirm/prompt via WKUIDelegate, so they are the honest
+   * fallback: single candidate asks yes/no, multiple candidates ask for an
+   * ordinal via prompt (throwing a Chinese error when prompt is unavailable,
+   * e.g. when the host has not implemented the UI delegate). */
+  NativeUIBridge.prototype.installMolecule3DDialogs = function () {
+    const app = this.app();
+    const dc = app && app.documentController;
+    if (!dc) return;
+    if (this._molecule3DDialogs && this._molecule3DDialogs.dc === dc) return; // already installed on this controller
+    this.removeMolecule3DDialogs();
+    const describe = (c, i) => '分子 ' + (i + 1) + '（' + (Number(c && (c.size ?? c.atomCount)) || 0) + ' 个原子）';
+    const chooseTarget = async (candidates) => {
+      const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+      if (!list.length) return null;
+      if (list.length === 1) {
+        const ok = root.confirm('插入 3D 分子预览？\n' + describe(list[0], 0) + '\n将使用示例构型。');
+        return ok ? list[0] : null;
+      }
+      if (typeof root.prompt !== 'function') {
+        throw new Error('请在画布中仅选择一个分子后重试');
+      }
+      const names = list.map((c, i) => describe(c, i)).join('\n');
+      const raw = root.prompt('画布中有多个分子，请输入序号选择要插入 3D 分子预览的分子：\n' + names);
+      if (raw == null) return null;
+      const idx = Number(String(raw).trim()) - 1;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= list.length) {
+        throw new Error('请在画布中仅选择一个分子后重试（或输入 1 到 ' + list.length + ' 的序号）');
+      }
+      return list[idx];
+    };
+    const summary = (v) => {
+      if (v == null) return '';
+      if (typeof v === 'string' || typeof v === 'number') return String(v);
+      if (Array.isArray(v)) return v.map(x => (typeof x === 'string' ? x : x && (x.label || x.id)) || '').filter(Boolean).join('、');
+      if (typeof v === 'object') {
+        return Object.entries(v).filter(([, n]) => !Number.isFinite(Number(n)) || Number(n) > 0)
+          .map(([k, n]) => k + ' ' + n).join('，');
+      }
+      return '';
+    };
+    const stereoChoice = async (stereo) => {
+      const s = stereo || {};
+      const detail = [summary(s.counts), summary(s.molecules)].filter(Boolean).join('\n');
+      return !!root.confirm('3D 构象需要立体化学信息。\n' + (detail ? detail + '\n' : '') + '使用示例构型？');
+    };
+    // The document UI supplies working HTML dialogs in WKWebView. Native
+    // confirm/prompt are only fallbacks for controllers without that UI.
+    this._molecule3DDialogs = { dc, prevChoose: dc.onChooseMolecule3DTarget, prevStereo: dc.onStereoChoiceRequired, chooseTarget, stereoChoice };
+    if (typeof dc.onChooseMolecule3DTarget !== 'function') dc.onChooseMolecule3DTarget = chooseTarget;
+    if (typeof dc.onStereoChoiceRequired !== 'function') dc.onStereoChoiceRequired = stereoChoice;
+  };
+
+  NativeUIBridge.prototype.removeMolecule3DDialogs = function () {
+    const rec = this._molecule3DDialogs;
+    if (!rec) return;
+    if (rec.dc) {
+      if (rec.dc.onChooseMolecule3DTarget === rec.chooseTarget) rec.dc.onChooseMolecule3DTarget = rec.prevChoose;
+      if (rec.dc.onStereoChoiceRequired === rec.stereoChoice) rec.dc.onStereoChoiceRequired = rec.prevStereo;
+    }
+    this._molecule3DDialogs = null;
+  };
+
   /* Release-only single commit: native slider sends exactly one setProperty on
    * release; the engine call is the existing setBendForSelection whose internal
    * begin/finish already joins one undo entry. */
@@ -1533,8 +1726,12 @@
     const propertyId = args && args.propertyId;
     const props = this.buildSelection().properties;
     const prop = props.find(p => p.id === propertyId);
-    if (!prop) return { error: { code: 'unsupported', message: '未公开的可写属性：' + propertyId } };
-    if (prop.enabled === false) return { error: { code: 'failed', message: '该属性当前不可写' } };
+    const selectedDocIds = Array.from((documentController && documentController.selection) || []);
+    const selectedDoc = selectedDocIds.length === 1 && documentController.object ? documentController.object(selectedDocIds[0]) : null;
+    const legacyShapeFillAlias = propertyId === 'fill' && selectedDoc?.kind === 'shape' &&
+      props.some(item => item.id === 'fill.mode') && props.some(item => item.id === 'fillColor');
+    if (!prop && !legacyShapeFillAlias) return { error: { code: 'unsupported', message: '未公开的可写属性：' + propertyId } };
+    if (prop && prop.enabled === false) return { error: { code: 'failed', message: '该属性当前不可写' } };
     if (propertyId === 'bend') {
       const value = Number(args.value);
       if (!Number.isFinite(value) || value < prop.min || value > prop.max) return { error: { code: 'invalid_arguments', message: 'bend 超出范围' } };
@@ -1563,10 +1760,72 @@
       this.noteCommittedEdit();
       return true;
     }
-    // Document object fields: only verified updateObject fields. Release-only
-    // commits (native slider/text) produce exactly one undo entry each.
+    if (propertyId === 'scale.preset') {
+      const dc = documentController;
+      const value = Number(args.value);
+      if (!dc || typeof dc.applyScalePercent !== 'function' || typeof dc.beginScaleSession !== 'function') {
+        return { error: { code: 'not_ready', message: '选区缩放层尚未就绪' } };
+      }
+      if (!dc.state || dc.state.mode !== 'paper') {
+        return { error: { code: 'unsupported', message: '选区缩放仅在纸页模式可用' } };
+      }
+      if (!Number.isFinite(value) || value <= 0 || value > 800) {
+        return { error: { code: 'invalid_arguments', message: 'scale.preset 需要有效的数字百分比' } };
+      }
+      if (typeof dc.hasScaleSelection === 'function' && dc.hasScaleSelection() !== true) {
+        return { error: { code: 'stale_selection', message: '当前选区不支持缩放' } };
+      }
+      if (command.expectedSelectionRevision !== undefined && command.expectedSelectionRevision !== null) {
+        const check = this.checkSelectionStale(command);
+        if (check === 'stale') return { error: { code: 'stale_selection', message: '选区已变化，请重新读取 state' } };
+      }
+      this.stopForManualEdit();
+      // applyScalePercent internally reuses an open session; beginScaleSession
+      // first so the percent is always measured against session start.
+      dc.beginScaleSession();
+      dc.applyScalePercent(value);
+      this.noteCommittedEdit();
+      return true;
+    }
+    // Drawing defaults are app-local preferences: applying them updates only
+    // the next shape and never creates history or marks the document dirty.
     const dc = documentController;
     const docIds = Array.from((dc && dc.selection) || []);
+    if (propertyId.startsWith('shapeStyle.')) {
+      if (!dc || !['rect', 'roundRect', 'ellipse', 'line', 'arrow', 'polygon', 'bracket'].includes(dc.tool) || typeof dc.setShapeStyle !== 'function') {
+        return { error: { code: 'stale_selection', message: '当前未选择形状绘图工具' } };
+      }
+      const id = propertyId.slice('shapeStyle.'.length), value = args.value, style = dc.shapeStyle || {};
+      const unit = Number(dc.state && dc.state.ptPerBond) > 0 ? Number(dc.state.ptPerBond) : 14.4;
+      const validColor = v => typeof v === 'string' && (/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) || /^(transparent|black|white|red|blue|green|gray)$/i.test(v));
+      let patch = {};
+      if (id === 'stroke.color' || id === 'fillColor') {
+        if (!validColor(value)) return { error: { code: 'invalid_arguments', message: '颜色请使用标准 HEX' } };
+        if (id === 'stroke.color') patch.stroke = { color: value };
+        else patch = { fillColor: value, ...(style.fill !== 'none' ? { fill: value } : {}) };
+      } else if (id === 'stroke.width') {
+        const raw = Number(value);
+        if (!Number.isFinite(raw) || raw < 0.1 || raw > 72) return { error: { code: 'invalid_arguments', message: '边框宽度 (pt) 应为 0.1–72' } };
+        patch.stroke = { width: raw / unit };
+      } else if (id === 'stroke.dash') {
+        if (!['solid', 'dashed'].includes(String(value))) return { error: { code: 'invalid_arguments', message: '线型无效' } };
+        patch.stroke = { dash: String(value) };
+      } else if (id === 'fill.mode') {
+        if (!['filled', 'none'].includes(String(value))) return { error: { code: 'invalid_arguments', message: '填充状态无效' } };
+        const fillColor = style.fillColor || (style.fill && style.fill !== 'none' ? style.fill : '#ffffff');
+        patch = String(value) === 'none' ? { fill: 'none', fillColor } : { fill: fillColor, fillColor };
+      } else if (id === 'cornerRadius' && ['rect', 'roundRect'].includes(dc.tool)) {
+        const raw = Number(value);
+        if (!Number.isFinite(raw) || raw < 0 || raw > 1000) return { error: { code: 'invalid_arguments', message: '圆角半径 (pt) 应为 0–1000' } };
+        patch.cornerRadius = raw / unit;
+      } else return { error: { code: 'unsupported', message: '未公开的可写属性：' + propertyId } };
+      this.stopForManualEdit();
+      dc.setShapeStyle(patch);
+      this.noteCommittedEdit();
+      return true;
+    }
+    // Document object fields: only verified updateObject fields. Release-only
+    // commits (native slider/text) produce exactly one undo entry each.
     const direct = {
       width: v => ({ w: Number(v) }), height: v => ({ h: Number(v) }),
       rotation: v => ({ rotation: Number(v) }), band: v => ({ band: v === 'front' ? 'front' : 'back' })
@@ -1583,10 +1842,13 @@
     }
     /* Extended real object properties: rich text, shape stroke/fill, image crop.
      * Each commit goes through updateObject's single-history commit. */
-    if (docIds.length === 1 && (/^(rich|stroke|fill|crop)\./.test(propertyId) || propertyId === 'fill')) {
+    if (docIds.length === 1 && (/^(rich|stroke|fill|crop)\./.test(propertyId) || ['fill', 'fillColor', 'fill.mode', 'cornerRadius'].includes(propertyId))) {
       const current = dc.object(docIds[0]);
       if (!current) return { error: { code: 'stale_selection', message: '选区已不含该对象' } };
-      const patch = {};
+      if ((propertyId.startsWith('stroke.') || propertyId.startsWith('fill') || propertyId === 'cornerRadius') && current.kind !== 'shape') {
+        return { error: { code: 'unsupported', message: '形状属性只适用于形状对象' } };
+      }
+      let patch = {};
       const value = args.value;
       const boolish = v => v === 'true' || v === true;
       if (propertyId === 'rich.text') patch.rich = { ...(current.rich || {}), text: String(value == null ? '' : value).slice(0, 262144) };
@@ -1596,11 +1858,37 @@
       else if (propertyId === 'rich.bold') patch.rich = { ...(current.rich || {}), bold: boolish(value) };
       else if (propertyId === 'rich.italic') patch.rich = { ...(current.rich || {}), italic: boolish(value) };
       else if (propertyId === 'rich.align') patch.rich = { ...(current.rich || {}), align: ['left','center','right'].includes(String(value)) ? String(value) : 'left' };
-      else if (propertyId === 'stroke.color') patch.stroke = { ...(current.stroke || {}), color: /^#[0-9a-f]{3,8}$/i.test(String(value)) ? String(value) : '#3b5665' };
-      else if (propertyId === 'stroke.width') patch.stroke = { ...(current.stroke || {}), width: Math.max(0.005, Math.min(5, Number(value) || 0.05)) };
-      else if (propertyId === 'stroke.dash') patch.stroke = { ...(current.stroke || {}), dash: value === 'dashed' ? 'dashed' : 'solid' };
-      else if (propertyId === 'fill') patch.fill = String(value) === 'none' || /^#[0-9a-f]{3,8}$/i.test(String(value)) ? String(value) : 'none';
-      else if (propertyId.startsWith('crop.')) {
+      else if (propertyId === 'stroke.color') {
+        const color = String(value), valid = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color) || /^(transparent|black|white|red|blue|green|gray)$/i.test(color);
+        if (!valid) return { error: { code: 'invalid_arguments', message: '描边颜色请使用标准 HEX' } };
+        patch.stroke = { ...(current.stroke || {}), color };
+      } else if (propertyId === 'stroke.width') {
+        const pt = Number(value), unit = Number(dc.state && dc.state.ptPerBond) > 0 ? Number(dc.state.ptPerBond) : 14.4;
+        if (!Number.isFinite(pt) || pt < 0.1 || pt > 72) return { error: { code: 'invalid_arguments', message: '边框宽度 (pt) 应为 0.1–72' } };
+        patch.stroke = { ...(current.stroke || {}), width: pt / unit };
+      } else if (propertyId === 'stroke.dash') {
+        if (!['dashed', 'solid'].includes(String(value))) return { error: { code: 'invalid_arguments', message: '线型无效' } };
+        patch.stroke = { ...(current.stroke || {}), dash: String(value) };
+      } else if (propertyId === 'fill.mode') {
+        if (current.kind !== 'shape' || !['filled', 'none'].includes(String(value))) return { error: { code: 'invalid_arguments', message: '填充状态无效' } };
+        const fillColor = current.fillColor || (current.fill && current.fill !== 'none' ? current.fill : '#ffffff');
+        patch = String(value) === 'none' ? { fill: 'none', fillColor } : { fill: fillColor, fillColor };
+      } else if (propertyId === 'fillColor') {
+        const color = String(value), valid = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color) || /^(transparent|black|white|red|blue|green|gray)$/i.test(color);
+        if (current.kind !== 'shape' || !valid) return { error: { code: 'invalid_arguments', message: '填充颜色请使用标准 HEX' } };
+        patch = { fillColor: color, ...(current.fill !== 'none' ? { fill: color } : {}) };
+      } else if (propertyId === 'cornerRadius') {
+        const pt = Number(value), unit = Number(dc.state && dc.state.ptPerBond) > 0 ? Number(dc.state.ptPerBond) : 14.4;
+        const max = Math.min(current.w, current.h) / 2 * unit;
+        if (current.kind !== 'shape' || !['rect', 'roundRect'].includes(current.shape) || !Number.isFinite(pt) || pt < 0 || pt > max + 1e-8) {
+          return { error: { code: 'invalid_arguments', message: '圆角半径超出该形状范围' } };
+        }
+        patch.cornerRadius = pt / unit;
+      } else if (propertyId === 'fill') {
+        const color = String(value);
+        if (color !== 'none' && !/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color)) return { error: { code: 'invalid_arguments', message: '填充颜色请使用标准 HEX 或 none' } };
+        patch = color === 'none' ? { fill: color } : { fill: color, fillColor: color };
+      } else if (propertyId.startsWith('crop.')) {
         const key = propertyId.slice(5), raw = Number(value);
         if (!Number.isFinite(raw) || raw < 0 || raw > 1) {
           return { error: { code: 'invalid_arguments', message: '裁剪范围应在 0–1 内' } };

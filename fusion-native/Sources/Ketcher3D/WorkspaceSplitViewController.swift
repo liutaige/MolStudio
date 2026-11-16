@@ -7,7 +7,7 @@ import Foundation
 /// 3. Native `NSSplitViewItem(inspectorWithViewController:)` Inspector/AI panel (`WorkspaceInspectorViewController`)
 /// Automatically propagates divider resize / collapse geometry to `WorkspaceStateCoordinator.updateHostViewport(...)`
 /// without ever mutating document dirty state or duplicating file/chemistry/AI runtimes.
-final class WorkspaceSplitViewController: NSSplitViewController {
+final class WorkspaceSplitViewController: NSSplitViewController, NSPopoverDelegate {
     let coordinator: WorkspaceStateCoordinator
     let libraryViewController: WorkspaceLibraryViewController
     let canvasHostViewController: WorkspaceCanvasHostViewController
@@ -50,6 +50,7 @@ final class WorkspaceSplitViewController: NSSplitViewController {
 
         configureSplitItems()
         propertiesPopover.behavior = .transient
+        propertiesPopover.delegate = self
         propertiesPopover.contentViewController = inspectorViewController.propertiesViewController
         propertiesPopover.contentSize = NSSize(width: 320, height: 520)
         wireComponents()
@@ -168,6 +169,20 @@ final class WorkspaceSplitViewController: NSSplitViewController {
             inspectorSplitItem.isCollapsed = false
         }
         syncStateAndViewport(forceViewport: true)
+    }
+
+    private var keepsOwnedColorPickerOpen: Bool {
+        NSApp.isActive && inspectorViewController.hasActiveOwnedColorPickerSession
+            && NSColorPanel.shared.isVisible && NSApp.keyWindow === NSColorPanel.shared
+    }
+
+    func popoverShouldClose(_ popover: NSPopover) -> Bool {
+        guard popover === propertiesPopover else { return true }
+        // The shared picker is a separate key window in this interaction.
+        // Other outside clicks retain the normal transient-popover behaviour.
+        if keepsOwnedColorPickerOpen { return false }
+        inspectorViewController.cancelPendingLocalEdits()
+        return true
     }
 
     // MARK: - NSUserInterfaceValidations
@@ -295,6 +310,7 @@ final class WorkspaceSplitViewController: NSSplitViewController {
         toolbarController.canvasViewProvider = { [weak self] in self?.canvasHostViewController.canvasContentView }
         toolbarController.onToggleSidebar = { [weak self] in self?.toggleLibrarySidebar() }
         toolbarController.onToggleInspector = { [weak self] in self?.toggleInspectorPanel() }
+        canvasHostViewController.onShapeStyleRequested = { [weak self] in self?.showInspectorTab(.properties) }
         toolbarController.onToggleAgent = { [weak self] in self?.toggleAgentInspectorTab() }
 
         inspectorViewController.onSelectedTabChanged = { [weak self] _ in
@@ -337,10 +353,38 @@ final class WorkspaceSplitViewController: NSSplitViewController {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                self?.inspectorViewController.cancelPendingLocalEdits()
-                self?.pushHostFocusContext()
+                guard let self else { return }
+                if !self.keepsOwnedColorPickerOpen { self.inspectorViewController.cancelPendingLocalEdits() }
+                self.pushHostFocusContext()
             }
-            notificationObservers = [become, resign]
+            let resignApplication = NotificationCenter.default.addObserver(
+                forName: NSApplication.didResignActiveNotification,
+                object: NSApp,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.inspectorViewController.cancelPendingLocalEdits()
+                self.propertiesPopover.performClose(nil)
+                self.pushHostFocusContext()
+            }
+            let becomeAnotherWindow = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self, weak window] note in
+                guard let self, let window, self.inspectorViewController.hasActiveOwnedColorPickerSession,
+                      let next = note.object as? NSWindow,
+                      next !== window,
+                      next !== self.inspectorViewController.propertiesViewController.view.window else { return }
+                var parent: NSWindow? = next
+                while let candidate = parent {
+                    if candidate === NSColorPanel.shared { return }
+                    parent = candidate.parent
+                }
+                self.inspectorViewController.cancelPendingLocalEdits()
+                self.propertiesPopover.performClose(nil)
+            }
+            notificationObservers = [become, resign, resignApplication, becomeAnotherWindow]
         }
 
         if firstResponderObservation == nil {

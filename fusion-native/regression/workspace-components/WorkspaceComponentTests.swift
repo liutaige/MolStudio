@@ -22,7 +22,8 @@ private func expectEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: St
     }
 }
 
-private func runTest(_ name: String, _ block: () -> Void) {
+@MainActor
+private func runTest(_ name: String, _ block: @MainActor () -> Void) {
     let before = failedAssertions.count
     block()
     if failedAssertions.count == before {
@@ -487,7 +488,10 @@ private func runAllTests() {
         bridge.attachedEpoch = ep
         bridge.initialState = makeReadyState(epoch: ep, revision: 1)
 
-        let canvasView = NSView(frame: NSRect(x: 0, y: 0, width: 700, height: 600))
+        final class FeedbackFocusProbeView: NSView {
+            override var acceptsFirstResponder: Bool { true }
+        }
+        let canvasView = FeedbackFocusProbeView(frame: NSRect(x: 0, y: 0, width: 700, height: 600))
         let coord = WorkspaceStateCoordinator(bridge: bridge)
         let splitVC = WorkspaceSplitViewController(coordinator: coord, canvasContentView: canvasView)
         let window = NSWindow(
@@ -541,6 +545,20 @@ private func runAllTests() {
         let paletteFrame = splitVC.canvasHostViewController.toolPaletteView.frame
         let paletteMidInSuper = overlayContainer.convert(NSPoint(x: paletteFrame.midX, y: paletteFrame.midY), to: overlayContainer.superview)
         expect(overlayContainer.hitTest(paletteMidInSuper) != nil, "Floating tool palette intercepts clicks inside its capsule")
+
+        let feedbackHost = splitVC.canvasHostViewController
+        expect(window.makeFirstResponder(canvasView), "Focus probe view before showing canvas feedback")
+        feedbackHost.showCanvasFeedback(message: "第一次整理")
+        expectEqual(feedbackHost.currentCanvasFeedbackMessage, "第一次整理", "Canvas feedback displays the current message")
+        feedbackHost.showCanvasFeedback(message: "结构已整齐，位置与画法保持不变")
+        expectEqual(feedbackHost.currentCanvasFeedbackMessage, "结构已整齐，位置与画法保持不变", "A newer feedback message replaces the previous one")
+        let feedbackPoint = NSPoint(x: feedbackHost.canvasFeedbackOverlayView.bounds.midX, y: feedbackHost.canvasFeedbackOverlayView.bounds.midY)
+        expect(feedbackHost.canvasFeedbackOverlayView.hitTest(feedbackPoint) == nil, "Canvas feedback overlay passes hit testing through")
+        expect(window.firstResponder === canvasView, "Canvas feedback does not change the first responder")
+        expectEqual(coord.documentMetadata.isDirty, false, "Canvas feedback never dirties the document")
+        feedbackHost.setNavigationCoverVisible(true)
+        expectEqual(feedbackHost.currentCanvasFeedbackMessage, nil, "Navigation clears feedback so it cannot remain on another page")
+        feedbackHost.setNavigationCoverVisible(false)
 
         // Switch 2-column -> 1-column increments layoutRevision and narrows width without dirtying document
         let revBeforeToggle = coord.hostContext.viewport?.layoutRevision ?? 0
@@ -1260,12 +1278,133 @@ struct WorkspaceComponentTestRunner {
     @MainActor
     static func main() {
         runAllTests()
+        runColorWellTests()
         runRealJSFixtureTests()
         runIntegrationReviewFixTests()
         runCheckpointFallbackFailureInjectionTests()
         print("SUMMARY: passed=\(passedTests) failedAssertions=\(failedAssertions.count)")
         if !failedAssertions.isEmpty {
             exit(1)
+        }
+    }
+
+    @MainActor
+    private static func runColorWellTests() {
+        runTest("ColorWellCommitsOnceAndRejectsStalePanelActions") {
+            var revision = 7
+            var commits: [(String, String, Int)] = []
+            var focusRestores = 0
+            let property = WorkspaceSelectionProperty(
+                id: "shapeStyle.stroke.color",
+                label: "默认描边颜色",
+                type: .text,
+                value: .string("#123456"),
+                enabled: true
+            )
+            let view = WorkspaceCommitColorWellView(
+                property: property,
+                selectionRevision: revision,
+                selectionRevisionProvider: { revision },
+                onCommitValue: { id, value, expectedRevision in
+                    commits.append((id, value, expectedRevision))
+                },
+                onRestoreCanvasFocus: { focusRestores += 1 }
+            )
+            expectEqual(view.colorWell.isContinuous, false, "Color well does not stream commits while a color is being chosen")
+
+            @MainActor func sendColorAction(_ color: NSColor) {
+                view.colorWell.color = color
+                guard let action = view.colorWell.action else {
+                    expect(false, "Color well action is installed")
+                    return
+                }
+                let delivered = NSApplication.shared.sendAction(action, to: view.colorWell.target, from: view.colorWell)
+                expect(delivered, "Color well action reaches its native property view")
+            }
+
+            @MainActor func openPicker() {
+                view.colorWell.onMouseDown?()
+                view.colorWell.activate(true)
+                let activationSessionActive = view.hasActiveOwnedPickerSession
+                expect(activationSessionActive, "The host sees the owned picker during mouseDown activation before AppKit returns")
+                view.colorWell.onMouseDownEnded?()
+                let isActive = view.colorWell.isActive
+                let panelVisible = NSColorPanel.shared.isVisible
+                let sessionActive = view.hasActiveOwnedPickerSession
+                expect(isActive, "The color well owns the active picker after opening it")
+                expect(panelVisible, "Opening the color well shows the shared AppKit color panel")
+                expect(sessionActive, "The Inspector exposes an active owned-picker session to its host")
+            }
+
+            @MainActor func expectPanelClosed(_ message: String) {
+                let panelVisible = NSColorPanel.shared.isVisible
+                expect(!panelVisible, message)
+            }
+            openPicker()
+            sendColorAction(.red)
+            expectPanelClosed("Committing one color closes the panel opened by this well")
+            let commitClearsSession = !view.hasActiveOwnedPickerSession
+            expect(commitClearsSession, "A committed color clears the host-visible picker session")
+            expectEqual(commits.count, 1, "One picker choice produces one property commit")
+            if let commit = commits.first {
+                expectEqual(commit.0, "shapeStyle.stroke.color", "Default color property id is preserved")
+                expectEqual(commit.1, "#FF0000", "Picker color is serialized as a standard hex value")
+                expectEqual(commit.2, 7, "Picker commit uses the captured selection revision")
+            }
+            expectEqual(focusRestores, 1, "Canvas focus is restored after the picker commits")
+
+            // A lingering action from the old shared panel has no captured
+            // revision after the first commit and cannot create a stale edit.
+            sendColorAction(.blue)
+            expectEqual(commits.count, 1, "A stale follow-up action from the retired picker is ignored")
+            let staleColorRestored = view.colorWell.color.isEqual(NSColor.red)
+            expect(staleColorRestored, "Ignored stale action restores the committed swatch")
+
+            revision = 8
+            let refreshedProperty = WorkspaceSelectionProperty(
+                id: "shapeStyle.stroke.color",
+                label: "默认描边颜色",
+                type: .text,
+                value: .string("#FF0000"),
+                enabled: true
+            )
+            view.applyProperty(refreshedProperty, selectionRevision: revision)
+            openPicker()
+            sendColorAction(.blue)
+            expectPanelClosed("The reopened picker closes after its second color choice")
+            expectEqual(commits.count, 2, "Reopening the picker captures the refreshed revision")
+            if commits.count > 1 { expectEqual(commits[1].2, 8, "Second picker choice uses the refreshed selection revision") }
+            openPicker()
+            view.cancelInteraction()
+            expectPanelClosed("Cancelling closes the panel owned by this well")
+            let cancelClearsSession = !view.hasActiveOwnedPickerSession
+            expect(cancelClearsSession, "Cancelling clears the host-visible picker session")
+            sendColorAction(.red)
+            expectEqual(commits.count, 2, "A cancelled picker action creates no property commit")
+            let cancelledColorRestored = view.colorWell.color.isEqual(NSColor.blue)
+            expect(cancelledColorRestored, "Cancellation restores the last committed swatch")
+
+            var fillCommits: [(String, String, Int)] = []
+            let fillView = WorkspaceCommitColorWellView(
+                property: WorkspaceSelectionProperty(id: "fillColor", label: "填充颜色", type: .text, value: .string("#FFFFFF"), enabled: true),
+                selectionRevision: 9,
+                selectionRevisionProvider: { 9 },
+                onCommitValue: { id, value, expectedRevision in fillCommits.append((id, value, expectedRevision)) }
+            )
+            fillView.colorWell.onMouseDown?()
+            fillView.colorWell.activate(true)
+            fillView.colorWell.onMouseDownEnded?()
+            fillView.colorWell.color = .green
+            if let action = fillView.colorWell.action {
+                _ = NSApplication.shared.sendAction(action, to: fillView.colorWell.target, from: fillView.colorWell)
+            }
+            expectEqual(fillCommits.count, 1, "A selected object's fill color commits through its native color well")
+            if let commit = fillCommits.first {
+                expectEqual(commit.0, "fillColor", "Selected fill color keeps the existing property contract")
+                expectEqual(commit.1, "#00FF00", "Selected fill color is serialized to HEX")
+                expectEqual(commit.2, 9, "Selected fill color uses the active selection revision")
+            }
+            expectPanelClosed("Selected fill commits close their own picker panel")
         }
     }
 

@@ -117,19 +117,26 @@
     }
 
     /* ---------------- 孤对 ---------------- */
+    /* 所属原子的视觉缩放因子：点径/间隙随所属分子的纸页实际尺寸同比 */
+    atomScaleOf(uuid, ctx) {
+      const f = ctx && typeof ctx.scaleOfAtom === 'function' ? ctx.scaleOfAtom(uuid) : 1;
+      return M.finite(f) && f > 0 ? f : 1;
+    }
+
     renderLonePairs(model, ctx, u, sel, state, targetGroup) {
       const parent = targetGroup || this.body;
       const forExport = !!targetGroup;
       const groups = new Map();
       for (const lp of model.state.lonePairs) {
         if (lp.visible === false) continue;
+        const f = this.atomScaleOf(lp.ownerAtomId, ctx);
         const pos = M.lonePairPosition(lp, ctx);
         if (!pos) continue;                      // 所属原子不存在：不画（箭头会标失效）
         const ang = M.lonePairAngle(lp, ctx);
         const dir = { x: Math.cos(ang), y: Math.sin(ang) };
         const n = M.perp(dir);
-        const gap = PX.dotGap * u;
-        const r = PX.dotRadius * u;
+        const gap = PX.dotGap * u * f;
+        const r = PX.dotRadius * u * f;
         const selected = !forExport && sel.has(lp.id);
         const g = this.el('g', {
           class: 'mech-lone-pair',
@@ -171,9 +178,10 @@
     renderGhosts(state, ctx, u) {
       const ghosts = state.ghosts || [];
       if (!ghosts.length) return;
-      const gap = PX.dotGap * u;
-      const r = PX.dotRadius * u * 0.92;
       for (const g of ghosts) {
+        const f = this.atomScaleOf(g.ownerAtomId, ctx);
+        const gap = PX.dotGap * u * f;
+        const r = PX.dotRadius * u * 0.92 * f;
         const pos = M.lonePairPosition(g, ctx);
         if (!pos) continue;
         const ang = M.lonePairAngle(g, ctx);
@@ -196,11 +204,23 @@
     /* ---------------- 箭头 ---------------- */
     /* u     = 成品尺度（曲线主体/线宽/箭头尖，与结构同比，导出也用它）
        uUi   = 交互尺度（手柄、失效提示文字），默认与成品相同（导出时用不到交互） */
+    /* 箭头视觉缩放因子：显式 arrow.scale 优先，否则取端点绑定原子的因子 */
+    arrowScaleFactor(ar, ctx) {
+      if (M.finite(ar.scale) && ar.scale > 0 && Math.abs(ar.scale - 1) > 1e-9) return ar.scale;
+      const atoms = M.endpointAtomIds(ar.source).concat(M.endpointAtomIds(ar.target));
+      for (const uuid of atoms) {
+        const f = this.atomScaleOf(uuid, ctx);
+        if (Math.abs(f - 1) > 1e-9) return f;
+      }
+      return 1;
+    }
+
     renderArrows(model, ctx, u, sel, state, targetGroup, uUi) {
       const ui = M.finite(uUi) && uUi > 0 ? uUi : u;
       const parent = targetGroup || this.body;
       const forExport = !!targetGroup;
       for (const ar of model.state.arrows) {
+        const f = this.arrowScaleFactor(ar, ctx);
         const geo = M.arrowGeometry(ar, ctx);
         const bad = !geo.sourceOk || !geo.targetOk;
         const selected = !forExport && sel.has(ar.id);
@@ -220,7 +240,7 @@
         const d = 'M ' + geo.start.x + ' ' + geo.start.y + ' Q ' + geo.control.x + ' ' + geo.control.y + ' ' + geo.end.x + ' ' + geo.end.y;
         this.el('path', {
           d: d, fill: 'none', stroke: color,
-          'stroke-width': PX.stroke * u,
+          'stroke-width': PX.stroke * u * f,
           'stroke-linecap': 'round',
           'stroke-dasharray': bad ? (PX.badDash[0] * u) + ' ' + (PX.badDash[1] * u) : null
         }, g);
@@ -233,8 +253,8 @@
           ? MW.route.arcLength(geo.start, geo.control, geo.end)
           : M.dist(geo.start, geo.end);
         const headLen = Math.max(
-          Math.min(PX.arrowHeadLen * u, arcLen * PX.arrowHeadArcRatio),
-          Math.min(PX.arrowHeadMinLen * u, arcLen * 0.5)
+          Math.min(PX.arrowHeadLen * u * f, arcLen * PX.arrowHeadArcRatio),
+          Math.min(PX.arrowHeadMinLen * u * f, arcLen * 0.5)
         );
         const ang = Math.atan2(tan.y, tan.x);
         const a1 = ang + Math.PI - (PX.arrowHeadAngle * Math.PI / 180);
@@ -244,7 +264,7 @@
           this.el('path', {
             d: 'M ' + (geo.end.x + Math.cos(a) * headLen) + ' ' + (geo.end.y + Math.sin(a) * headLen) +
                ' L ' + geo.end.x + ' ' + geo.end.y,
-            fill: 'none', stroke: color, 'stroke-width': PX.stroke * u, 'stroke-linecap': 'round'
+            fill: 'none', stroke: color, 'stroke-width': PX.stroke * u * f, 'stroke-linecap': 'round'
           }, g);
         }
 

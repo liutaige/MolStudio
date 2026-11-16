@@ -6,6 +6,8 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #fafafa; }
   #v { width: 100%; height: 100%; }
+  html.embed, html.embed body, html.embed #v canvas { background: transparent !important; }
+  html.embed #geometry-note { display: none; }
   #geometry-note { position: absolute; top: 10px; left: 10px; right: 10px;
     width: fit-content; max-width: calc(100% - 40px); padding: 7px 10px;
     border: 1px solid #dbe2e8; border-radius: 6px; background: rgba(255,255,255,.94);
@@ -32,6 +34,7 @@ stage.setParameters({ clipNear: 0 });
    ?noimp → 关 impostor 改用真实网格几何（软件渲染下 impostor 有伪影，截图不可信）
    ?p={"radiusScale":0.2,...} → 覆盖球棍参数，用于调参 */
 const QS = new URLSearchParams(location.search);
+if (QS.get("embed")) document.documentElement.classList.add("embed");
 const TUNE = (() => { try { return JSON.parse(QS.get("p") || "{}"); } catch (e) { return {}; } })();
 if (QS.has("noimp")) stage.setParameters({ impostor: false });
 
@@ -69,16 +72,19 @@ window.k3d = {
     stage.removeAllComponents();
     comp = null;                    // load 期间 style() 不再往游离组件上加表示
     const blob = new Blob([block], { type: "text/plain" });
-    stage.loadFile(blob, { ext: "sdf" }).then(c => {
+    window.__loadError = null;
+    return stage.loadFile(blob, { ext: "sdf" }).then(c => {
       if (seq !== showSeq) return;  // 已有更新的 show，丢弃本次 load
       comp = c;
       window.k3d.style(window.__lastStyle || "ballstick");  // 加载完成时读取最新期望样式，不用闭包捕获的旧选择
-      stage.autoView();
+      stage.autoView(0);
       stage.handleResize();
+      return new Promise(resolve => stage.tasks.onZeroOnce(resolve));
     }).catch(e => {
       if (seq !== showSeq) return;
       window.__loadError = String((e && e.message) || e);  // molblock 非法不再静默白屏
       console.error("k3d loadFile failed:", e);
+      if (QS.get("embed")) throw e;
     });
   },
   style: s => {
@@ -138,7 +144,7 @@ window.k3d = {
     } catch (e) {}
   },
   spin: on => { try { stage.setSpin(!!on); } catch (e) {} },  // 该构建 setSpin 只收单布尔，多余参数被忽略
-  reset: () => { stage.autoView(); }
+  reset: () => { stage.viewerControls.rotate([0, 0, 0, 1]); stage.autoView(0); }
 };
 
 /* 手势：全部交给 NGL 内置鼠标控制（拖拽旋转 / 滚轮缩放 / 右键拖拽平移） */
@@ -174,6 +180,189 @@ window.addEventListener("resize", () => stage.handleResize());
 new ResizeObserver(() => {
   stage.handleResize();
 }).observe(document.getElementById("v"));
+</script>
+<script>
+/* 内嵌交互总线（embed=1）：供宿主页面经 postMessage 控制 3D 视口并取快照。
+   只增不改：上方 window.k3d.* 与原生窗口注入路径行为完全不变。 */
+(function () {
+  const QS2 = new URLSearchParams(location.search);
+  if (!QS2.get("embed")) return;
+
+  // 内嵌模式：隐藏页面级说明横幅（geometry-note），只保留 stage 视口
+  const note = document.getElementById("geometry-note");
+  if (note) note.hidden = true;
+
+  // 快照 / 相机均走 NGL 真实 API：
+  // - stage.makeImage(params) → Promise<Blob>（PNG）
+  // - stage.viewerControls：get position（translationGroup.position）、getCameraDistance()、distance(e)
+  function viewerCamera() {
+    const vc = stage.viewerControls;
+    const pos = vc.position; // getter → viewer.translationGroup.position
+    return {
+      px: Math.round(pos.x * 10000) / 10000,
+      py: Math.round(pos.y * 10000) / 10000,
+      pz: Math.round(pos.z * 10000) / 10000,
+      distance: Math.round(vc.getCameraDistance() * 10000) / 10000,
+      qx: vc.rotation.x, qy: vc.rotation.y, qz: vc.rotation.z, qw: vc.rotation.w
+    };
+  }
+  function applyViewerCamera(cam) {
+    if (!cam || typeof cam !== "object") return false;
+    const nums = [cam.px, cam.py, cam.pz, cam.distance];
+    if (!nums.every(n => typeof n === "number" && isFinite(n)) || cam.distance <= 0) return false;
+    const vc = stage.viewerControls;
+    const keys = ['qx', 'qy', 'qz', 'qw'];
+    if (keys.some(key => cam[key] !== undefined)) {
+      if (!keys.every(key => Number.isFinite(cam[key]))) return false;
+      const length = Math.hypot(...keys.map(key => cam[key]));
+      if (length < 1e-8) return false;
+      vc.rotate(keys.map(key => cam[key] / length));
+    }
+    vc.position.set(cam.px, cam.py, cam.pz); // 原地写回 translationGroup.position
+    vc.distance(cam.distance);
+    return true;
+  }
+  function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("快照读取失败"));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // 文档图裁剪透明 alpha 包围盒，再等比居中放进原视口尺寸；不拉伸，也不铺白底。
+  // 最长方向留约 6% 透明边，避免分子贴边。独立 3D 快照不启用此处理。
+  function trimTransparentToFrame(dataURL, width, height) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => {
+        try {
+          const sourceWidth = image.naturalWidth || image.width;
+          const sourceHeight = image.naturalHeight || image.height;
+          const outputWidth = Math.max(1, Math.round(width || sourceWidth));
+          const outputHeight = Math.max(1, Math.round(height || sourceHeight));
+          const source = document.createElement('canvas');
+          source.width = sourceWidth; source.height = sourceHeight;
+          const sourceContext = source.getContext('2d', { willReadFrequently: true });
+          sourceContext.drawImage(image, 0, 0);
+          const rgba = sourceContext.getImageData(0, 0, sourceWidth, sourceHeight).data;
+          let minX = sourceWidth, minY = sourceHeight, maxX = -1, maxY = -1;
+          for (let y = 0; y < sourceHeight; y++) {
+            for (let x = 0; x < sourceWidth; x++) {
+              // Ignore only fully transparent / near-zero AA noise; preserve antialiased edges.
+              if (rgba[(y * sourceWidth + x) * 4 + 3] <= 2) continue;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+          // A blank WebGL frame remains a valid transparent snapshot at the requested dimensions.
+          if (maxX < minX || maxY < minY) {
+            const blank = document.createElement('canvas');
+            blank.width = outputWidth; blank.height = outputHeight;
+            resolve(blank.toDataURL('image/png')); return;
+          }
+          const boundsWidth = maxX - minX + 1, boundsHeight = maxY - minY + 1;
+          const target = document.createElement('canvas');
+          target.width = outputWidth; target.height = outputHeight;
+          const context = target.getContext('2d');
+          const scale = Math.min(outputWidth * 0.88 / boundsWidth, outputHeight * 0.88 / boundsHeight);
+          const drawWidth = boundsWidth * scale, drawHeight = boundsHeight * scale;
+          const x = (outputWidth - drawWidth) / 2, y = (outputHeight - drawHeight) / 2;
+          context.clearRect(0, 0, outputWidth, outputHeight);
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = 'high';
+          context.drawImage(source, minX, minY, boundsWidth, boundsHeight, x, y, drawWidth, drawHeight);
+          resolve(target.toDataURL('image/png'));
+        } catch (error) { reject(error); }
+      };
+      image.onerror = () => reject(new Error('透明边距裁剪失败'));
+      image.src = dataURL;
+    });
+  }
+
+  const HANDLED = ["hello", "show", "style", "reset", "spin", "snapshot", "camera-get", "camera-set", "dispose"];
+  function reply(id, ok, extra) {
+    // 校验 source 为父窗口
+    const target = (window.parent && window.parent !== window) ? window.parent : null;
+    if (!target) return;
+    target.postMessage(Object.assign({ type: "k3d-embed-result", id, ok: !!ok }, extra || {}), "*");
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;  // 只接受父窗口
+    const data = event.data;
+    if (!data || typeof data !== "object" || data.type !== "k3d-embed") return;
+    const id = data.id;
+    if (!HANDLED.includes(data.action)) {
+      reply(id, false, { error: "未知的 embed action：" + data.action });
+      return;
+    }
+    Promise.resolve().then(() => {
+      switch (data.action) {
+        case "hello":
+        case "dispose":
+          if (data.action === "dispose") { try { stage.dispose(); } catch (e) {} }
+          return;
+        case "show":
+          return window.k3d.show(data.molblock, data.style);
+        case "style":
+          window.k3d.style(data.style);
+          return;
+        case "reset":
+          window.k3d.reset();
+          return;
+        case "spin":
+          window.k3d.spin(!!data.on);
+          return;
+        case "snapshot": {
+          // makeImage 只收 trim/factor/antialias/transparent；视口 resize 和 alpha 裁剪仅供请求方显式启用。
+          const w = data.width, h = data.height;
+          // Alpha 裁边会放大分子在最终帧中的像素占比；用 3× WebGL 输出再缩小，避免低分辨率放大变糊。
+          const factor = data.trim === true ? 3 : 1;
+          const vp = document.getElementById("v");
+          const doSnap = () => stage.makeImage({ trim: false, factor, transparent: true })
+            .then(blobToDataURL)
+            .then(dataURL => data.trim === true
+              ? trimTransparentToFrame(dataURL, w > 0 ? w : vp.clientWidth, h > 0 ? h : vp.clientHeight)
+              : dataURL);
+          if (!(w > 0 && h > 0)) return doSnap().then(dataURL => ({ dataURL }));
+          const oldW = vp.style.width, oldH = vp.style.height;
+          stage.setSize(Math.round(w) + "px", Math.round(h) + "px");
+          return new Promise(res => setTimeout(res, 120)).then(doSnap).then(dataURL => {
+            stage.setSize(oldW || "", oldH || "");
+            return { dataURL };
+          }, err => {
+            stage.setSize(oldW || "", oldH || "");
+            throw err;
+          });
+        }
+        case "camera-get":
+          return { camera: viewerCamera() };
+        case "camera-set":
+          if (!applyViewerCamera(data.camera)) throw new Error("camera 数据无效");
+          return;
+        default:
+          throw new Error("未知的 embed action：" + data.action);
+      }
+    }).then(extra => reply(id, true, extra || {}))
+      .catch(err => reply(id, false, { error: String((err && err.message) || err) }));
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      window.parent.postMessage({ type: 'k3d-embed-cancel' }, '*');
+    }
+  });
+
+  // 加载完成后主动向宿主报 hello（宿主凭它触发 show）
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({ type: "k3d-embed", id: 0, action: "hello" }, "*");
+  }
+})();
 </script>
 </body>
 </html>

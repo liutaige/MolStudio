@@ -97,7 +97,9 @@
           "document.arrow",
           "document.polygon",
           "document.roundRect",
+          "document.text",
           "document.image",
+          "insert.view3d",
           "ketcher.image"
         ],
         "elementSymbols": [
@@ -444,7 +446,9 @@
             "document.arrow",
             "document.polygon",
             "document.roundRect",
+            "document.text",
             "document.image",
+            "insert.view3d",
             "ketcher.image"
           ],
           "elementSymbols": [
@@ -697,7 +701,9 @@
             "document.arrow",
             "document.polygon",
             "document.roundRect",
+            "document.text",
             "document.image",
+            "insert.view3d",
             "ketcher.image"
           ],
           "elementSymbols": [
@@ -1429,7 +1435,9 @@
             "document.arrow",
             "document.polygon",
             "document.roundRect",
+            "document.text",
             "document.image",
+            "insert.view3d",
             "ketcher.image"
           ],
           "elementSymbols": [
@@ -1670,7 +1678,9 @@
         "document.arrow",
         "document.polygon",
         "document.roundRect",
+        "document.text",
         "document.image",
+        "insert.view3d",
         "ketcher.image"
       ],
       "elementSymbols": [

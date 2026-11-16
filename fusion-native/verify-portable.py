@@ -34,6 +34,7 @@ def exercise(app, temp):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
+    assert os.path.isfile(os.path.join(resources, "conservative_layout.py")), "Missing conservative layout module"
     proc = subprocess.Popen([python, "-I", "-B", os.path.join(resources, "server.py"), str(port)],
                             cwd=temp, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
@@ -79,6 +80,18 @@ def exercise(app, temp):
             with urllib.request.urlopen(req, timeout=20) as response:
                 result = json.load(response)
                 assert result.get("ok"), result
+        layout_ket = {"root": {"nodes": [{"$ref": "mol0"}]}, "mol0": {
+            "type": "molecule", "atoms": [
+                {"label": "C", "location": [0.0, 0.0, 0.0]},
+                {"label": "O", "location": [1.0, 0.0, 0.0]}],
+            "bonds": [{"type": 1, "atoms": [0, 1]}]}}
+        req = urllib.request.Request(base + "/api/layout",
+                                     data=json.dumps({"ket": json.dumps(layout_ket)}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as response:
+            result = json.load(response)
+            assert result.get("ok") and result.get("coordinateScale") == "preserved", result
+            assert result["molecules"][0]["atoms"] == [[0.0, 0.0], [1.0, 0.0]], result
         for smiles, count in (("F[Xe](F)(F)F", 5), ("F[Kr]F", 3),
                               ("FCl(F)F", 4), ("FI(F)(F)(F)(F)(F)F", 8)):
             req = urllib.request.Request(base + "/api/gen3d",

@@ -335,11 +335,14 @@ function applyLayout(st, map, molecules) {
   for (const m of molecules) {
     const ids = map[m.key];
     if (!ids) continue;
-    for (let i = 0; i < m.atoms.length; i++) {
-      const a = st.atoms.get(ids[i]);
+    const adapter = typeof window === 'object' ? window.MolWorkbench?.app?.adapter : null;
+    const rawCoords = m.atoms.map((p, i) => [ids[i], p[0], -p[1]]);
+    const coords = m.coordinateScale === 'preserved' ? rawCoords : (adapter?.scaleLayoutCoordinates?.(rawCoords) || rawCoords);
+    for (const [id, x, y] of coords) {
+      const a = st.atoms.get(id);
       if (!a || !a.pp) continue;
-      a.pp.x = m.atoms[i][0];
-      a.pp.y = -m.atoms[i][1];
+      a.pp.x = x;
+      a.pp.y = y;
     }
     for (const b of m.bonds || []) {
       const i1 = ids[b.i], i2 = ids[b.j];
@@ -448,7 +451,7 @@ async function cleanLayout() {
   }
 
   const identity = identityOf(ket);
-  const res = await postJSON('/api/layout', { ket, points, identity });
+  const res = await postJSON('/api/layout', { ket, points, identity, mode: 'preserve' });
   if (!res || res.ok !== true) {
     return { ok: false, code: (res && res.code) || 'layout_failed',
              message: (res && res.error) || '整理失败，原图未修改' };
@@ -468,6 +471,17 @@ async function cleanLayout() {
   const before = captureState(st, built.map, res.molecules);
   applyLayout(st, built.map, res.molecules);
   const after = captureState(st, built.map, res.molecules);
+  const movedAtomIds = new Set(before.atoms.filter((atom, i) => Math.hypot(atom[1] - after.atoms[i][1], atom[2] - after.atoms[i][2]) > 1e-8).map(atom => atom[0]));
+  const movedUuids = new Set([...movedAtomIds].map(id => window.MolWorkbench?.app?.adapter?.atomUuid.get(id)).filter(Boolean));
+  if (res.coordinateScale === 'preserved' && !movedAtomIds.size) {
+    // A successful check is not an edit. Preserve the previous undo target,
+    // dirty state and electron curves when the drawing needs no local changes.
+    applyState(st, before);
+    let message = res.warnings?.length ? '已保留原有位置与画法；' + res.warnings[0].message : '结构已整齐，位置与画法保持不变';
+    if (res.skipped?.length) message += '；已跳过 ' + res.skipped.length + ' 个校验未通过的结构（' + res.skipped[0].error + '）';
+    return { ok: true, code: 'ok', unchanged: true, message, molecules: res.molecules.map(m => m.key),
+      arrowsReplanned: 0, arrowsCrowded: 0, ...(res.skipped?.length ? { skipped: res.skipped } : {}) };
+  }
   before.inverse = after;
   after.inverse = before;
   const markLayoutChanged = () => markChanged(ed, before.atoms.map(a => a[0]), before.bonds.map(b => b[0]));
@@ -483,7 +497,7 @@ async function cleanLayout() {
     if (model && mechBefore) { try { model.setState(mechBefore, 'silent'); } catch (e) {} }
     replannedArrows = crowdedArrows = 0;
   };
-  if (controller && model && typeof controller.replanArrowInPlace === 'function') {
+  if (movedUuids.size && controller && model && typeof controller.replanArrowInPlace === 'function') {
     try {
       mechBefore = model.cloneState();
       if (model.state.arrows.some(arrow => window.MolWorkbench.model.arrowMode(arrow) === 'auto')) {
@@ -493,8 +507,14 @@ async function cleanLayout() {
       }
       const replannedIds = [];
       const finalPlans = new Map();
+      const ctx = controller.ctx();
+      const touchesMoved = endpoint => {
+        if (endpoint.type !== 'bond') return window.MolWorkbench.model.endpointAtomIds(endpoint).some(id => movedUuids.has(id));
+        const bond = ctx.bondInfo(endpoint.bondId);
+        return bond && (movedUuids.has(bond.beginAtom) || movedUuids.has(bond.endAtom));
+      };
       for (const arrow of model.state.arrows) {
-        if (window.MolWorkbench.model.arrowMode(arrow) !== 'auto') continue;
+        if (window.MolWorkbench.model.arrowMode(arrow) !== 'auto' || (!touchesMoved(arrow.source) && !touchesMoved(arrow.target))) continue;
         const plan = controller.replanArrowInPlace(arrow, true);
         if (plan) {
           replannedIds.push(arrow.id);
@@ -528,7 +548,8 @@ async function cleanLayout() {
   if (controller) { try { controller.refreshAutoSlots(); controller.render(); } catch (e) {} }
 
   const report = (res.molecules && res.molecules[0] && res.molecules[0].report) || {};
-  let message = '结构已整理' + (replannedArrows ? '，并重排 ' + replannedArrows + ' 根自动箭头' : '') + (crowdedArrows ? '（' + crowdedArrows + ' 根仍拥挤）' : '');
+  let message = (movedAtomIds.size ? '结构已局部整理' : '已保留原有位置与画法') + (replannedArrows ? '，并重排 ' + replannedArrows + ' 根自动箭头' : '') + (crowdedArrows ? '（' + crowdedArrows + ' 根仍拥挤）' : '');
+  if (res.warnings?.length) message += '；' + res.warnings[0].message;
   if (Array.isArray(res.skipped) && res.skipped.length) {
     message += '；已跳过 ' + res.skipped.length + ' 个校验未通过的结构（' + res.skipped[0].error + '）';
   }
@@ -739,6 +760,8 @@ window.k3dAPI = {
 <script src="workbench/mechanism-ui.js"></script>
 <script src="workbench/mechanism-export.js"></script>
 <script>window.MolWorkbenchOptions = { automaticReadingZoom: 1 };</script>
+<script src="workbench/document-rich-text.js"></script>
+<script src="workbench/document-object-3d.js"></script>
 <script src="workbench/document-clipboard.js"></script>
 <script src="workbench/document-controller.js"></script>
 <script src="workbench/document-pages-ui.js"></script>

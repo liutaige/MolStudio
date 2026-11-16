@@ -37,6 +37,7 @@ TARGETS = [
     'func askDiscardAnyway(', 'func askTerminateDiscardAnyway(', 'func contentTypes(',
     # 2026-11-01 立体整理 / 3D 提示：文案与结果提示
     'func stereoPromptMessage(', 'func stereoBadgeText(', 'func reportLayoutResult(',
+    'func actClean(', 'func invalidateCleanLayoutRequest(',
     'func confirmStereoExample(',
 ]
 
@@ -245,6 +246,8 @@ final class StubWeb {
 // main.swift, so these only model the AppKit/Workspace objects they talk to.
 final class StubCanvasHost {
     var coverVisible = true
+    var feedbackMessages: [String] = []
+    func showCanvasFeedback(message: String) { feedbackMessages.append(message) }
     var failureReasons: [String] = []
     func setNavigationCoverVisible(_ visible: Bool) { coverVisible = visible }
     func showNavigationFailure(reason: String? = nil, canSave: Bool = true) {
@@ -313,6 +316,8 @@ final class Probe {
     func waitWorkbenchLayersReady(gen: Int, required: WorkbenchLayerRequirements, attemptsLeft: Int, _ done: @escaping (Bool, String) -> Void) { done(true, "") }
     var serverPython: String?
     var serverStderrTail = ""
+    var cleanLayoutInFlight = false
+    var cleanLayoutRequestGeneration = 0
     var thumbnailGeneration = 0
     let serverStderrLimit = 8000
 
@@ -344,6 +349,8 @@ final class Probe {
     func noteRecentDocument(_ url: URL) { recentNoted.append(url); refreshFileList() }
 
     // jsValue 替身：脚本化页面快照与注入结果
+    var deferClean = false
+    var pendingClean: [(Any?, Bool) -> Void] = []
     var pageSnapshot: String?          // 完整画布快照
     var injectResultOK = true          // setMolecule 是否成功
     var injectReturnValue: Any? = "true"
@@ -362,6 +369,11 @@ final class Probe {
 
     func jsValue(_ body: String, _ done: @escaping (Any?, Bool) -> Void) {
         jsBodies.append(body)
+        if body.contains("k3dAPI.cleanLayout()") {
+            if deferClean { pendingClean.append(done) }
+            else { done(["ok": true, "message": "结构已整理"], true) }
+            return
+        }
         if body.contains("crypto.subtle.digest") {
             if deferThumbnail { pendingThumbnails.append(done) }
             else { done(["mode":"paper", "dataUrl":"data:image/png;base64,YQ=="], true) }
@@ -1148,6 +1160,37 @@ do {
           p.alerts.last?.0 == "整理未应用" && p.alerts.last?.1 == "整理会改变立体构型，已取消")
     p.reportLayoutResult(["ok": false, "code": "stale", "message": "画布内容已改变，本次整理未应用"])
     check("T9 陈旧结果不当作成功", p.alerts.last?.0 == "整理未应用")
+}
+
+do {
+    resetStatics()
+    let p = Probe()
+    p.workspaceSplitVC = StubSplitVC()
+    p.deferClean = true
+    p.actClean()
+    p.actClean()
+    check("T10 连续点击仅发送一次整理", p.pendingClean.count == 1 && p.cleanLayoutInFlight)
+    check("T10 整理开始显示原生进度", p.workspaceSplitVC?.canvasHostViewController.feedbackMessages.last == "正在整理结构…")
+    let complete = p.pendingClean.removeFirst()
+    complete(["ok": true, "unchanged": true], true)
+    check("T10 完成后允许再次整理", !p.cleanLayoutInFlight)
+    check("T10 无需调整也显示明确结果", p.workspaceSplitVC?.canvasHostViewController.feedbackMessages.last == "结构已整齐，位置与画法保持不变")
+    p.actClean()
+    let old = p.pendingClean.removeFirst()
+    p.navigationGeneration += 1
+    p.invalidateCleanLayoutRequest()
+    check("T10 导航作废旧请求并恢复整理", !p.cleanLayoutInFlight)
+    p.actClean()
+    let newRequest = p.pendingClean.removeFirst()
+    let statusCount = p.statuses.count
+    old(["ok": true, "message": "OLD"], true)
+    check("T10 旧回调不能清除新请求忙状态", p.cleanLayoutInFlight)
+    check("T10 旧回调不能显示到新页面", p.statuses.count == statusCount && p.workspaceSplitVC?.canvasHostViewController.feedbackMessages.last == "正在整理结构…")
+    newRequest(["ok": true, "message": "NEW"], true)
+    check("T10 新请求正常完成", !p.cleanLayoutInFlight && p.statuses.last == "NEW")
+    p.actClean()
+    p.pendingClean.removeFirst()(nil, false)
+    check("T10 页面读取失败恢复按钮并提示", !p.cleanLayoutInFlight && p.alerts.last?.0 == "整理未应用")
 }
 
 print("---- S03 保存请求不得跨会话或覆盖后发保存 ----")

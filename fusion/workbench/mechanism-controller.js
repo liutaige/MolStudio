@@ -292,6 +292,12 @@
     /* ---------------- 解析上下文 / 渲染 ---------------- */
     ctx() { return this.adapter.context(this.model); }
 
+    /* 原子的视觉缩放因子（纸页实际尺寸缩放）：新画孤对/箭头继承，保持视觉一致 */
+    visualFactor(uuid) {
+      const f = this.adapter.effectiveAtomScale ? this.adapter.effectiveAtomScale(uuid) : 1;
+      return M.finite(f) && f > 0 ? f : 1;
+    }
+
     /* ---------------- 自动排布 ----------------
      * 只在这里调用 mechanism-route.js：新建（草稿预览/提交）、端点重绑、一键重新排布。
      * 视口 zoom/pan/resize、结构移动、撤销重做都不触发重规划（指令第 3.4 / 5 节）。
@@ -902,7 +908,7 @@
       const atomPos = hit.point;
       const angle = Math.atan2(p.y - atomPos.y, p.x - atomPos.x) * 180 / Math.PI;
       this.commit(() => {
-        const lp = M.makeLonePair(owner, { origin: 'manual', angle: angle });
+        const lp = M.makeLonePair(owner, { origin: 'manual', angle: angle, radius: 0.42 * this.visualFactor(owner) });
         this.model.addLonePair(lp);
         this.selection.clear();
         this.selection.add(lp.id);
@@ -1387,9 +1393,11 @@
       const before = this.model.cloneState();
       let ep = resolved.endpoint;
       if (resolved.pending) {
+        const pendingFactor = this.visualFactor(resolved.pending.ownerAtomId);
         const lp = M.makeLonePair(resolved.pending.ownerAtomId, {
           origin: resolved.pending.origin || 'manual',
           angle: resolved.pending.angle,
+          radius: 0.42 * pendingFactor,
           refAtomId: resolved.pending.refAtomId || null,
           angleRel: resolved.pending.angleRel === undefined ? null : resolved.pending.angleRel
         });
@@ -1432,6 +1440,7 @@
         const lp = M.makeLonePair(draft.pending.ownerAtomId, {
           origin: draft.pending.origin || 'manual',
           angle: draft.pending.angle,
+          radius: 0.42 * this.visualFactor(draft.pending.ownerAtomId),
           refAtomId: draft.pending.refAtomId || null,
           angleRel: draft.pending.angleRel === undefined ? null : draft.pending.angleRel
         });
@@ -1450,7 +1459,9 @@
         return;
       }
 
-      const ar = M.makeArrow(source, draft.target, { electronCount: draft.electronCount, bend: draft.bend });
+      const boundAtoms = M.endpointAtomIds(source).concat(M.endpointAtomIds(draft.target));
+      const ar = M.makeArrow(source, draft.target, { electronCount: draft.electronCount, bend: draft.bend,
+        scale: boundAtoms.length ? this.visualFactor(boundAtoms[0]) : 1 });
       this.model.addArrow(ar);
       const after = this.model.cloneState();
       this.model.setState(before, 'silent');
@@ -1681,7 +1692,8 @@
     materializeGhost(ghost, p, silent) {
       let made = null;
       const lp = M.makeLonePair(ghost.ownerAtomId, {
-        origin: 'auto', angle: ghost.angle, refAtomId: ghost.refAtomId, angleRel: ghost.angleRel
+        origin: 'auto', angle: ghost.angle, refAtomId: ghost.refAtomId, angleRel: ghost.angleRel,
+        radius: 0.42 * this.visualFactor(ghost.ownerAtomId)
       });
       if (silent) {
         // 与箭头同一个历史动作里提交（调用方负责）
@@ -1800,7 +1812,8 @@
       const documentFragment = this.documentController?.clipboardFragment();
       const reactionSteps = native ? MW.app?.reactionSteps?.captureClipboard?.() : null;
       const capturedIdentity = MW.documentClipboard?.capture(this);
-      const identity = capturedIdentity && (arrows.length || capturedIdentity.lonePairs.length || reactionSteps?.steps?.length) ? capturedIdentity : null;
+      const linkedPreview = documentFragment?.objects?.some(object => object.kind === 'molecule3d' && object.source?.atomUuids?.length);
+      const identity = capturedIdentity && (arrows.length || capturedIdentity.lonePairs.length || reactionSteps?.steps?.length || linkedPreview) ? capturedIdentity : null;
       if (!arrows.length && !documentFragment && !identity?.lonePairs.length && !reactionSteps?.steps?.length) return null;
 
       // 端点的「实际绘制位置」：只复制箭头时绑定端点会转成自由端点，
@@ -2264,6 +2277,7 @@
           resolved = MW.documentClipboard.resolve(this, session.lonePairSession);
           if (!resolved.ok) throw new Error(resolved.error);
           lonePairs = resolved.lonePairs;
+          this.documentController?.remapFragmentSources?.(session.document, resolved.atomMap);
           copies.forEach((ar, index) => { for (const side of ['source', 'target']) { const endpoint = MW.documentClipboard.remapEndpoint(session.originalArrows[index][side], resolved); if (endpoint) ar[side] = endpoint; } });
         }
         if (session.reactionSteps) {

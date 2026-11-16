@@ -28,6 +28,7 @@ from rdkit.Chem import AllChem  # noqa: E402
 
 sys.path.insert(0, BASE)
 import stereo  # noqa: E402  立体化学核心：KET↔RDKit 显式映射、整理、检查
+import conservative_layout  # noqa: E402  保留原子身份、朝向与比例的局部整理
 import inorganic  # noqa: E402  小分子无机物的离线参考几何
 import agent_gateway  # noqa: E402  本机模型鉴权与无缓冲流传输
 import agent_external_bridge  # noqa: E402  外部 MCP / Harness 画布协同桥接
@@ -915,12 +916,16 @@ class Handler(SimpleHTTPRequestHandler):
             raise ApiError("缺少画布数据", code="empty")
         points = payload.get("points") or None
         targets = payload.get("targets") or None
-        compact = payload.get("compact")
-        if compact is None:
-            # 全画布整理（无选区）默认做反应级紧凑排布；选中整理不全局重排。
-            compact = points is None
         try:
-            res = stereo.layout_ket(str(ket), targets=targets, points=points, compact=bool(compact))
+            # Default cleanup repairs the existing drawing locally. A full
+            # depiction/packing pass remains an explicit internal API option.
+            if payload.get("mode") == "rebuild":
+                compact = payload.get("compact")
+                if compact is None:
+                    compact = points is None
+                res = stereo.layout_ket(str(ket), targets=targets, points=points, compact=bool(compact))
+            else:
+                res = conservative_layout.layout_ket(str(ket), targets=targets, points=points)
         except stereo.StereoError as e:
             raise ApiError(str(e), code="layout_failed") from e
         res["identity"] = payload.get("identity")

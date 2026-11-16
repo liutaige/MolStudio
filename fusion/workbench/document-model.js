@@ -6,7 +6,8 @@
   const MW = (root.MolWorkbench = root.MolWorkbench || {});
   const SIZES = { A4: [595.28, 841.89], Letter: [612, 792] };
   const LIMITS = { pages: 100, objects: 10000, regions: 1000, assets: 256,
-    assetBytes: 64 * 1024 * 1024, coordinate: 100000, text: 262144 };
+    assetBytes: 64 * 1024 * 1024, coordinate: 100000, text: 262144, atomScales: 20000,
+    runs: 512, molfile: 262144, atomUuids: 512 };
   let sequence = 0;
   function id(prefix) {
     const crypto = root.crypto;
@@ -62,6 +63,9 @@
     const plain = x => !!x && typeof x === 'object' && !Array.isArray(x) && (Object.getPrototypeOf(x) === Object.prototype || Object.getPrototypeOf(x) === null);
     const finite = x => typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= LIMITS.coordinate;
     const validId = x => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(x);
+    const validShapeColor = x => typeof x === 'string' &&
+      (/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(x) ||
+        /^(transparent|black|white|red|blue|green|gray)$/i.test(x));
     if (!plain(doc)) return { ok: false, errors: ['document 必须是对象'] };
     // Reject non-JSON values, dangerous keys, excessive nesting and nonfinite numbers
     // everywhere, including future style fields. Never reinterpret raw markup as HTML.
@@ -113,17 +117,61 @@
     else for (const obj of doc.objects) {
       if (!plain(obj)) { fail('文档对象无效'); continue; }
       unique(obj.id);
-      if (!['text', 'image', 'shape'].includes(obj.kind) || !rect(obj) ||
-          (obj.rotation !== undefined && !finite(obj.rotation)) || (obj.band !== undefined && !['front', 'back'].includes(obj.band)) ||
+      if (!['text', 'image', 'shape', 'molecule3d'].includes(obj.kind) || !rect(obj) ||
+          (obj.rotation !== undefined && !finite(obj.rotation)) ||
+          (obj.band !== undefined && !['front', 'back'].concat(obj.kind === 'molecule3d' ? ['inline'] : []).includes(obj.band)) ||
           (obj.pageId !== undefined && obj.pageId !== null && !pages.has(obj.pageId))) fail('文档对象几何或类型无效');
       if (obj.kind === 'image' && (!validId(obj.asset) || !plain(doc.assets) || !Object.prototype.hasOwnProperty.call(doc.assets, obj.asset))) fail('图片资源引用不存在');
       if (obj.kind === 'text' && (obj.html !== undefined || !plain(obj.rich) ||
           typeof obj.rich.text !== 'string' || obj.rich.text.length > LIMITS.text ||
-          Object.keys(obj.rich).some(key => !['text', 'fontFamily', 'fontSize', 'bold', 'italic', 'color', 'align', 'lineHeight'].includes(key)) ||
+          Object.keys(obj.rich).some(key => !['text', 'fontFamily', 'fontSize', 'bold', 'italic', 'color', 'align', 'lineHeight', 'runs'].includes(key)) ||
           ['fontFamily', 'color', 'align'].some(key => obj.rich[key] !== undefined && (typeof obj.rich[key] !== 'string' || obj.rich[key].length > 160)) ||
           ['fontSize', 'lineHeight'].some(key => obj.rich[key] !== undefined && (!finite(obj.rich[key]) || obj.rich[key] <= 0)) ||
           ['bold', 'italic'].some(key => obj.rich[key] !== undefined && typeof obj.rich[key] !== 'boolean'))) fail('文本必须使用安全的结构数据');
-      if (obj.kind === 'shape' && !['rect', 'roundRect', 'ellipse', 'line', 'arrow', 'polygon', 'bracket'].includes(obj.shape)) fail('形状类型无效');
+      else if (obj.kind === 'text' && obj.rich.runs !== undefined) {
+        // runs 是可选字段：模块缺失时 fail closed（宁拒勿静默丢弃格式数据）
+        if (!Array.isArray(obj.rich.runs) || obj.rich.runs.length > LIMITS.runs) fail('文本 runs 无效');
+        else if (!MW.documentRichText) fail('富文本模块未加载');
+        else {
+          const checked = MW.documentRichText.validateRuns(obj.rich.runs, obj.rich.text);
+          if (!checked.ok) for (const message of checked.errors.slice(0, 3)) fail(message);
+        }
+      }
+      if (obj.kind === 'molecule3d') {
+        if (MW.documentObject3D) {
+          const checked = MW.documentObject3D.validateObject(obj);
+          if (!checked.ok) for (const message of checked.errors.slice(0, 3)) fail(message);
+        } else {
+          // 兜底基本检查：保证只加载 document-model 的 Node 环境也能拒绝非法数据
+          if (typeof obj.molfile !== 'string' || obj.molfile.length === 0 || obj.molfile.length > LIMITS.molfile) fail('molfile 无效');
+          if (!['ballstick', 'stick', 'line', 'sphere'].includes(obj.style)) fail('3D 样式无效');
+          if (!plain(obj.camera) || ['px', 'py', 'pz', 'distance'].some(key => !finite(obj.camera[key]))) fail('camera 无效');
+          if (obj.notes !== undefined && !plain(obj.notes)) fail('notes 无效');
+          if (obj.updatedAt !== undefined && !finite(obj.updatedAt)) fail('updatedAt 无效');
+        }
+        if (typeof obj.previewAsset === 'string' && obj.previewAsset &&
+            (!plain(doc.assets) || !Object.prototype.hasOwnProperty.call(doc.assets, obj.previewAsset))) fail('3D 预览资源引用不存在');
+        if (obj.source !== undefined) {
+          if (!plain(obj.source)) fail('molecule3d 来源信息无效');
+          else if (obj.source.atomUuids !== undefined &&
+              (!Array.isArray(obj.source.atomUuids) || obj.source.atomUuids.length > LIMITS.atomUuids ||
+                obj.source.atomUuids.some(u => !validId(u)))) fail('molecule3d 原子引用无效');
+        }
+      }
+      if (obj.kind === 'shape') {
+        if (!['rect', 'roundRect', 'ellipse', 'line', 'arrow', 'polygon', 'bracket'].includes(obj.shape)) fail('形状类型无效');
+        if (obj.cornerRadius !== undefined && (!finite(obj.cornerRadius) || obj.cornerRadius < 0)) fail('圆角半径无效');
+        if (obj.fillColor !== undefined && !validShapeColor(obj.fillColor)) fail('形状填充颜色无效');
+      }
+    }
+    // 可选 atomScales：uuid → 视觉缩放因子（纸页实际尺寸缩放的持久化通道）
+    if (doc.atomScales !== undefined) {
+      const entries = Object.entries(doc.atomScales || {});
+      if (!plain(doc.atomScales) || entries.length > LIMITS.atomScales) fail('原子缩放因子列表无效');
+      else for (const [key, value] of entries) {
+        if (!validId(key)) { fail('原子缩放因子键无效'); continue; }
+        if (!finite(value) || value <= 0 || value > 100) fail('原子缩放因子值必须是大于 0 且不超过 100 的有限数');
+      }
     }
     if (!Array.isArray(doc.regions) || doc.regions.length > LIMITS.regions) fail('区域列表无效');
     else for (const region of doc.regions) {

@@ -495,6 +495,106 @@ test('verified tool.set calls hit the real editor entry points with verified eng
   assert.equal(badElement.error.code, 'unsupported');
 });
 
+test('native geometry tools expose no-selection defaults and selected fill/radius commits through the document shape layer', async () => {
+  const { deps, app } = makeDeps();
+  const dc = app.documentController;
+  dc.state = { mode: 'canvas', ptPerBond: 14.4 };
+  dc.shapeStyle = { fill: 'none', fillColor: '#ffffff', stroke: { color: '#3b5665', width: 0.05, dash: 'solid' } };
+  dc.active = false; // A fresh canvas activates its document layer on the first object.
+  dc.setTool = function (tool) { this.tool = tool; this.active = true; this.emit(); };
+  dc.select = function (ids) {
+    this.selection = new Set(ids || []);
+    app.controller.selection.clear();
+    this.emit();
+    return [...this.selection];
+  };
+  dc.setShapeStyle = function (patch) {
+    this.shapeStyle = { ...this.shapeStyle, ...patch, stroke: { ...this.shapeStyle.stroke, ...(patch.stroke || {}) } };
+    this.emit('shape-style');
+  };
+  let shape = { id: 'shape-one', kind: 'shape', band: 'back', x: 2, y: 3, w: 8, h: 5, shape: 'rect', fill: 'none', fillColor: '#ffffff', stroke: { color: '#3b5665', width: .05, dash: 'solid' } };
+  dc.object = id => id === shape.id ? shape : null;
+  dc.updateObject = (id, patch) => { shape = { ...shape, ...patch, stroke: { ...shape.stroke, ...(patch.stroke || {}) } }; };
+  const bridge = new NativeUIBridge(deps);
+  await attachAll(bridge);
+
+  const toolReply = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-tool-rect', id: 'tool.set', args: { id: 'shape.rect' } });
+  assert.equal(toolReply.ok, true);
+  assert.equal(dc.tool, 'rect');
+  assert.equal(app.controller.adapter.ed.toolCalls.some(([name]) => name === 'simpleobject'), false, 'native rectangle routes to the editable document shape layer');
+  assert.equal(bridge.toolState().id, 'shape.rect');
+  let selection = bridge.buildSelection();
+  assert.equal(selection.count, 0);
+  assert.equal(selection.label, '形状样式');
+  assert.ok(selection.properties.some(prop => prop.id === 'shapeStyle.stroke.color' && prop.type === 'text'));
+  assert.ok(selection.properties.some(prop => prop.id === 'shapeStyle.fill.mode' && prop.type === 'choice'));
+  assert.ok(selection.properties.some(prop => prop.id === 'shapeStyle.cornerRadius' && prop.label.includes('(pt)')));
+
+  const defaultColor = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-default-color', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'shapeStyle.stroke.color', value: '#b13d74' } });
+  assert.equal(defaultColor.ok, true);
+  assert.equal(dc.shapeStyle.stroke.color, '#b13d74');
+  const defaultRadius = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-default-radius', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'shapeStyle.cornerRadius', value: 14.4 } });
+  assert.equal(defaultRadius.ok, true);
+  assert.equal(dc.shapeStyle.cornerRadius, 1, 'inspector pt converts to document bond units');
+
+  dc.selection = new Set([shape.id]);
+  selection = bridge.buildSelection();
+  assert.ok(selection.properties.some(prop => prop.id === 'fill.mode'));
+  assert.ok(selection.properties.some(prop => prop.id === 'fillColor'));
+  assert.ok(selection.properties.some(prop => prop.id === 'cornerRadius'));
+  const noFill = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-no-fill', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'fill.mode', value: 'none' } });
+  assert.equal(noFill.ok, true);
+  assert.equal(shape.fill, 'none');
+  const fillColor = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-fill-color', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'fillColor', value: '#2a78c5' } });
+  assert.equal(fillColor.ok, true);
+  assert.equal(shape.fill, 'none', 'changing retained fill colour does not turn fill back on');
+  assert.equal(shape.fillColor, '#2a78c5');
+  const filled = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-fill-on', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'fill.mode', value: 'filled' } });
+  assert.equal(filled.ok, true);
+  assert.equal(shape.fill, '#2a78c5');
+  const legacyFill = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-legacy-fill', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'fill', value: '#c2185b' } });
+  assert.equal(legacyFill.ok, true, JSON.stringify(legacyFill));
+  assert.equal(shape.fill, '#c2185b');
+  assert.equal(shape.fillColor, '#c2185b', 'legacy fill setter stays consistent with the renderer fillColor field');
+  const legacyNoFill = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-legacy-no-fill', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'fill', value: 'none' } });
+  assert.equal(legacyNoFill.ok, true);
+  assert.equal(shape.fill, 'none');
+  assert.equal(shape.fillColor, '#c2185b', 'legacy no-fill keeps the last picker color for later use');
+  const radius = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-selected-radius', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'cornerRadius', value: 7.2 } });
+  assert.equal(radius.ok, true);
+  assert.equal(shape.cornerRadius, .5);
+  shape = { ...shape, shape: 'line' };
+  assert.equal(bridge.buildSelection().properties.some(prop => prop.id === 'cornerRadius'), false, 'line shapes do not expose corner radius');
+
+  // Switching back to a drawing tool clears the previous document and
+  // mechanism selection without touching the selected object's saved style.
+  dc.selection = new Set([shape.id]);
+  app.controller.selection.add('previous-mechanism-selection');
+  const selectedStroke = shape.stroke.color;
+  const reselectTool = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-tool-again', id: 'tool.set', args: { id: 'shape.rect' } });
+  assert.equal(reselectTool.ok, true);
+  selection = bridge.buildSelection();
+  assert.equal(selection.count, 0, 'choosing a shape tool clears stale document and chemistry selections');
+  assert.equal(selection.label, '形状样式');
+  assert.ok(selection.properties.some(prop => prop.id === 'shapeStyle.stroke.color'));
+  const defaultStrokeOnDrawingTool = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-default-after-clear', id: 'selection.setProperty', expectedSelectionRevision: bridge.selectionRevision, args: { propertyId: 'shapeStyle.stroke.color', value: '#6f2479' } });
+  assert.equal(defaultStrokeOnDrawingTool.ok, true, 'defaults remain editable after selecting a drawing tool');
+  assert.equal(shape.stroke.color, selectedStroke, 'changing the next-shape default leaves the previous shape style intact');
+
+  for (const [id, tool, hasFill, hasRadius] of [
+    ['document.roundRect', 'roundRect', true, true], ['shape.ellipse', 'ellipse', true, false],
+    ['shape.line', 'line', false, false], ['document.arrow', 'arrow', false, false],
+    ['document.polygon', 'polygon', true, false], ['document.bracket', 'bracket', false, false]
+  ]) {
+    const selected = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'shape-tool-' + tool, id: 'tool.set', args: { id } });
+    assert.equal(selected.ok, true, 'native shape drawing tool is selectable: ' + tool);
+    assert.equal(dc.tool, tool);
+    const props = bridge.buildSelection().properties;
+    assert.equal(props.some(prop => prop.id === 'shapeStyle.fill.mode'), hasFill, tool + ' exposes fill only when applicable');
+    assert.equal(props.some(prop => prop.id === 'shapeStyle.cornerRadius'), hasRadius, tool + ' exposes radius only for rectangular shapes');
+  }
+});
+
 test('mechanism tools route through the verified semantic entry point', async () => {
   const { deps, app } = makeDeps();
   const savedAPI = globalThis.k3dAPI;

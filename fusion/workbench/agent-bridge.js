@@ -43,6 +43,31 @@
     // depiction uses alternating single/double bonds. Preserve both facts.
     return { ...(own(record, 'order') || nativeOrder !== null ? { order: record.order ?? nativeOrder } : {}), nativeType };
   }
+  /* 纸页实际尺寸缩放：把一条反应步骤记录的坐标类字段绕 anchor 缩放（纯数据，可单测）。
+     whole=false 时原样返回克隆。字段语义与 translateStepRuntime 的平移完全镜像。 */
+  function scaleStepRecord(record, options) {
+    const { factor, anchor, whole } = options || {};
+    const data = JSON.parse(JSON.stringify(record));
+    if (!whole) return data;
+    const px = value => anchor.x + (value - anchor.x) * factor;
+    const py = value => anchor.y + (value - anchor.y) * factor;
+    const point = p => ({ ...p, x: px(p.x), y: py(p.y) });
+    data.start = point(data.start);
+    data.end = point(data.end);
+    if (data.flow) {
+      for (const name of ['rowLeft', 'rowRight', 'arrowStartX', 'arrowEndX']) if (Number.isFinite(data.flow[name])) data.flow[name] = px(data.flow[name]);
+      for (const name of ['rowY', 'rowBottom', 'sourceRowY', 'arrowStartY', 'arrowEndY']) if (Number.isFinite(data.flow[name])) data.flow[name] = py(data.flow[name]);
+      if (Number.isFinite(data.flow.rowWidth)) data.flow.rowWidth *= factor;
+      if (Array.isArray(data.flow.anchors)) data.flow.anchors = data.flow.anchors.map(point);
+    }
+    for (const label of data.labels || []) if (label.role === 'graphPort') {
+      label.layoutX = px(label.layoutX);
+      label.layoutY = py(label.layoutY);
+      if (Number.isFinite(label.anchorDx)) label.anchorDx *= factor;
+      if (Number.isFinite(label.anchorDy)) label.anchorDy *= factor;
+    }
+    return data;
+  }
   function validateArrowAnchors(M, source, target, ctx, input = {}) {
     const start = M.endpointAnchor(source, ctx), end = M.endpointAnchor(target, ctx);
     const distance = M.dist(start, end);
@@ -1977,7 +2002,7 @@
       abort(signal);
       const response = await (options.fetch || root.fetch)('/api/layout', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ket: ketText, compact: true }), signal
+        body: JSON.stringify({ ket: ketText, mode: 'preserve' }), signal
       });
       const json = await response.json();
       if (!response.ok || json.ok !== true) return { ok: false, error: (json && json.error) || '整理失败', code: 'layout_failed' };
@@ -1986,7 +2011,7 @@
           return { ok: false, error: '整理结果坐标无效', code: 'layout_failed' };
         }
       }
-      return { ok: true, doc, molecules: json.molecules || [], keys };
+      return { ok: true, doc, molecules: json.molecules || [], keys, coordinateScale: json.coordinateScale, warnings: json.warnings || [], skipped: json.skipped || [] };
     }
     function orderedMoleculeKeysLocal(doc) {
       const out = [];
@@ -2447,6 +2472,26 @@
           }
         }
         connectors.set(key, record);
+      }
+      return { connectors, operations: new Map(state.operations || []) };
+    }
+    function scaleStepRuntime(state, options) {
+      const { factor, anchor } = options || {};
+      if (!Number.isFinite(factor) || factor <= 0) fail('步骤缩放比例无效', 'invalid_operation');
+      if (!anchor || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) fail('步骤缩放锚点无效', 'invalid_operation');
+      const selected = options.nativeSelection || {}, atoms = new Set(options.atomIds || selected.atoms || []);
+      const arrows = new Set(selected.rxnArrows || []), texts = new Set(selected.texts || []);
+      const components = new Map();
+      for (const part of connectedComponents()) for (const id of part.uuids) components.set(id, part.rids);
+      const connectors = new Map();
+      for (const [key, source] of state.connectors) {
+        const record = cloneConnector(source);
+        const whole = arrows.has(record.id) && [...record.reactants, ...record.products].every(id =>
+          components.get(id)?.every(rid => atoms.has(rid))) && (record.labels || []).every(label => texts.has(label.id));
+        const { nativeArrow, ...data } = record;
+        const scaled = scaleStepRecord(data, { factor, anchor, whole });
+        for (const value of Object.values(scaled.flow || {})) if (typeof value === 'number' && (!Number.isFinite(value) || Math.abs(value) > 10000)) fail('步骤缩放超出可保存范围', 'invalid_operation');
+        connectors.set(key, { ...scaled, nativeArrow });
       }
       return { connectors, operations: new Map(state.operations || []) };
     }
@@ -3241,7 +3286,7 @@
     }
     app.reactionSteps = { export: exportReactionSteps, restore: restoreReactionSteps,
       exportOperations: () => copy([...stepOperations.values()]), captureRuntime: captureStepRuntime, restoreRuntime: restoreStepRuntime,
-      translateRuntime: translateStepRuntime,
+      translateRuntime: translateStepRuntime, scaleRuntime: scaleStepRuntime,
       captureClipboard: captureClipboardSteps, prepareClipboardImport, appendClipboard: appendClipboardSteps, wrapClipboardHistory };
     // Task metadata is saved with the drawing, but never enters native drawing
     // history or the canvas revision fence. A checkpoint write must not make
@@ -4033,13 +4078,18 @@
               }
               if (data.ok !== true) fail('整理失败：' + ((data && data.error) || '布局服务返回失败'), 'layout_failed');
               const result = applyTidyResult(data, settings.signal);
-              actions.push(result.action);
-              nativeGeometryChanged = true;
-              const drawn = [...reactionConnectors.values(), ...pendingConnectors.values()].filter(connectorStillDrawn);
-              const boxes = reactionMoleculeBoxes();
-              for (const record of drawn) if (record.flow?.graph || drawn.some(next => isPreparationStepLink(record, next, boxes))) layoutSeeds.push({ op, record });
-              updated.push({ id: op.id, type: op.type, molecules: result.molecules, arrowsReplanned: result.replanned, entityIds: [] });
+              if (result.action) actions.push(result.action);
+              if (!result.unchanged) nativeGeometryChanged = true;
+              // Local cleanup must not seed a reaction-graph reflow: the
+              // existing stages, row breaks and native connectors stay in place.
+              if (data.coordinateScale !== 'preserved') {
+                const drawn = [...reactionConnectors.values(), ...pendingConnectors.values()].filter(connectorStillDrawn);
+                const boxes = reactionMoleculeBoxes();
+                for (const record of drawn) if (record.flow?.graph || drawn.some(next => isPreparationStepLink(record, next, boxes))) layoutSeeds.push({ op, record });
+              }
+              updated.push({ id: op.id, type: op.type, molecules: result.molecules, arrowsReplanned: result.replanned, unchanged: !!result.unchanged, entityIds: [] });
               if (result.crowded.length) warnings.push(op.id + ': 整理后 ' + result.crowded.length + ' 根自动箭头仍拥挤');
+              for (const warning of result.warnings || []) warnings.push(op.id + ': ' + warning.message);
               if (Array.isArray(result.skipped) && result.skipped.length) warnings.push(op.id + ': 已跳过 ' + result.skipped.length + ' 个化学校验未通过的结构');
               // The final commit emits the dirty hint once. Staging must stay silent.
             }
@@ -4191,7 +4241,7 @@
           }
           const limits = MW.storage.LIMITS;
           if (ed.struct().atoms.size > limits.atoms || ed.struct().bonds.size > limits.bonds || model.state.arrows.length > limits.arrows || model.state.lonePairs.length > limits.lonePairs) fail('工作台内容超过可保存的格式上限');
-          if (created.length || updated.length || deleted.length || actions.length) {
+          if (created.length || updated.some(item => item.type !== 'layout.tidy' || !item.unchanged) || deleted.length || actions.length) {
             for (const [key, record] of pendingConnectors) reactionConnectors.set(key, record);
             // Semantic metadata shares the native geometry's history item.
             // Restore it after native Undo and rebind after both Undo and Redo.
@@ -4293,8 +4343,10 @@
         const operationOrder = new Map(ops.map((op, index) => [op.id, index]));
         const steps = stepReceipts.concat(replayed).sort((first, second) => operationOrder.get(first.operationId) - operationOrder.get(second.operationId));
         const committed = { created, updated, deleted, cascaded, warnings, steps, ...(replayed.length && { replayed: true }) };
-        const count = created.length + updated.length + deleted.length;
-        return response(run, committed, count ? '已在画布完成 ' + count + ' 个操作（新增 ' + created.length + '、修改 ' + updated.length + '、删除 ' + deleted.length + '）；这一步可以撤销。' : '对应反应步骤已有直箭头。');
+        const changedUpdates = updated.filter(item => item.type !== 'layout.tidy' || !item.unchanged).length;
+        const count = created.length + changedUpdates + deleted.length;
+        return response(run, committed, count ? '已在画布完成 ' + count + ' 个操作（新增 ' + created.length + '、修改 ' + changedUpdates + '、删除 ' + deleted.length + '）；这一步可以撤销。' :
+          updated.some(item => item.type === 'layout.tidy') ? (warnings.length ? '结构已检查并保留原有位置与画法；部分结构仍需进一步调整，详见提示。' : '结构已检查，保留原有位置与画法；无需修改。') : '对应反应步骤已有直箭头。');
       };
       const prepareAndExecute = async () => {
         for (;;) {
@@ -4334,7 +4386,7 @@
       }
       return parts.join('；') || '无可用无遮挡路线';
     }
-    /* 整理：把 /api/layout（含反应级紧凑排布）的坐标落回画布，并重排受影响的
+    /* 整理：把 /api/layout 的局部修正坐标落回画布，并重排受影响的
        auto 箭头；manual 箭头保留 bend。坐标与箭头几何合成同一历史动作。
        KET 与画布的对照沿用 adapter 的双射校验映射（多解/重合一律失败，不猜）。 */
     function applyTidyResult(data, signal) {
@@ -4371,7 +4423,15 @@
       const undo = tidyAction(beforeCoords, beforeBonds);
       try {
         // 应用新坐标（KET y 轴向上，画布 y 轴向下）
-        applyAtomCoords(st, newCoords);
+        const layoutCoords = data.coordinateScale === 'preserved' ? newCoords : (a.scaleLayoutCoordinates?.(newCoords) || newCoords);
+        const movedUuids = new Set(layoutCoords.filter(([rid, x, y]) => {
+          const p = st.atoms.get(rid)?.pp;
+          return p && Math.hypot(p.x - x, p.y - y) > 1e-8;
+        }).map(([rid]) => a.atomUuid.get(rid)).filter(Boolean));
+        if (data.coordinateScale === 'preserved' && !movedUuids.size) {
+          return { action: null, unchanged: true, molecules: moleculeKeys, replanned: [], crowded: [], warnings: data.warnings || [], skipped: data.skipped || [] };
+        }
+        applyAtomCoords(st, layoutCoords);
         // 楔键方向翻转规则与 canvas.html applyLayout 一致：KET 的 atoms[0] 是窄端。
         for (const molecule of data.molecules) {
           const ids = (molecule.atoms || []).map((atom, index) => ridByMolIndex.get(molecule.key + '#' + index));
@@ -4401,8 +4461,14 @@
         const replanned = [], crowded = [];
         a.syncIdentity();
         const planMap = new Map();
+        const ctx = controller.ctx();
+        const touchesMoved = endpoint => {
+          if (endpoint.type !== 'bond') return M.endpointAtomIds(endpoint).some(id => movedUuids.has(id));
+          const bond = ctx.bondInfo(endpoint.bondId);
+          return bond && (movedUuids.has(bond.beginAtom) || movedUuids.has(bond.endAtom));
+        };
         for (const arrow of model.state.arrows) {
-          if (M.arrowMode(arrow) !== 'auto') continue;
+          if (M.arrowMode(arrow) !== 'auto' || (!touchesMoved(arrow.source) && !touchesMoved(arrow.target))) continue;
           const plan = controller.replanArrowInPlace(arrow, true);
           if (plan) { replanned.push(arrow.id); planMap.set(arrow.id, plan); }
         }
@@ -4420,7 +4486,7 @@
           if (plan && !plan.feasible) crowded.push(id);
         }
         abort(signal);
-        return { action: undo, molecules: moleculeKeys, replanned, crowded, ...(Array.isArray(data.skipped) && data.skipped.length ? { skipped: data.skipped } : {}) };
+        return { action: undo, molecules: moleculeKeys, replanned, crowded, warnings: data.warnings || [], ...(Array.isArray(data.skipped) && data.skipped.length ? { skipped: data.skipped } : {}) };
       } catch (error) {
         // The outer transaction can only undo actions which have returned.
         undo.perform(ctab);
@@ -4896,7 +4962,7 @@
       dispose() { disposed = true; for (const id of runs.keys()) clearPreview(id); offAdapter(); offModel(); ed.update = originalUpdate; a.k.setMolecule = originalSetMolecule; delete app.reactionSteps; delete app.agentTask; if (originalLoad) root.k3dAPI.loadWorkbench = originalLoad; }
     };
   }
-  if (typeof module !== 'undefined' && module.exports) module.exports = { validateOperations, validateArrowAnchors, bondObservation, inverseGroup, createBridge, dependencyOrder, resolveMoleculeHandle, resolveLonePairAimTarget, orientTerminalHydrogen, makeExplicitHydrogenPlan, revisionSource, automaticViewportPlan, LAYOUT };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { validateOperations, validateArrowAnchors, bondObservation, inverseGroup, createBridge, dependencyOrder, resolveMoleculeHandle, resolveLonePairAimTarget, orientTerminalHydrogen, makeExplicitHydrogenPlan, revisionSource, automaticViewportPlan, scaleStepRecord, LAYOUT };
   if (!root.document) return;
   const MW = root.MolWorkbench = root.MolWorkbench || {};
   MW.agentBridge = { createBridge, validateOperations, dependencyOrder, LAYOUT };

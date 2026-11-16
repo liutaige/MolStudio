@@ -52,6 +52,9 @@
       this._svgObserver = null;
       this._lastGeom = '';
       this._lastCamera = null;
+      this.visualScales = new Map();        // uuid → 原子视觉缩放因子（纸页实际尺寸缩放）
+      this._visualTextNodes = new WeakMap(); // 节点原始变换与最近一次后处理，重绘/连续缩放均不累乘
+      this._visualBondNodes = new WeakMap();
     }
 
     /* ---------------- 基础读取 ---------------- */
@@ -147,6 +150,7 @@
 
     syncIdentity() {
       const st = this.struct();
+      const previousUuids = new Set(this.uuidAtom.keys());
       const freshAtoms = new Set();
       const freshBonds = new Set();
       this._freshAtoms = freshAtoms;
@@ -215,11 +219,23 @@
       for (const [id, uuid] of this.bondUuid) {
         if (seenBonds.has(id)) this.uuidBond.set(uuid, id);
       }
+      this.inheritFreshAtomScales(freshAtoms);
 
       this.activeAtoms = seenAtoms;
       this.activeBonds = seenBonds;
 
       if (this.pendingHistory) this.reconcileRetired();
+      const document = MW.app?.documentController;
+      if (document?.active) {
+        // Runtime tombstones stay in visualScales for native redo; serialized
+        // metadata only contains live atoms. Do not touch unchanged identities
+        // while a document scale action is restoring its own state.
+        for (const uuid of previousUuids) if (!this.uuidAtom.has(uuid)) delete document.state.atomScales?.[uuid];
+        for (const uuid of this.uuidAtom.keys()) if (!previousUuids.has(uuid)) {
+          const factor = this.effectiveAtomScale(uuid);
+          if (Math.abs(factor - 1) >= 1e-9) { document.state.atomScales ||= {}; document.state.atomScales[uuid] = factor; }
+        }
+      }
     }
 
     /* 撤销/重做专用：把"被撤销删除"的对象认回原来的稳定 ID。
@@ -491,6 +507,163 @@
       return { hasLabel: false, hwCss: 0, hhCss: 0 };
     }
 
+    /* ---------------- 原子视觉缩放（纸页实际尺寸缩放的后处理通道） ----------------
+     * 坐标已经 bake 缩放；这里只按因子协调标签字号与键线宽，并按原子中心缩放
+     * 标签字形（transform 合成，幂等）。Ketcher 重绘会重建节点，重新套用即可。 */
+    setAtomVisualScale(uuid, factor) {
+      if (!uuid) return;
+      if (!M.finite(factor) || factor <= 0 || Math.abs(factor - 1) < 1e-9) this.visualScales.delete(uuid);
+      else this.visualScales.set(uuid, factor);
+    }
+
+    effectiveAtomScale(uuid) {
+      const f = uuid && this.visualScales.get(uuid);
+      return M.finite(f) && f > 0 ? f : 1;
+    }
+
+    componentAtomIds(seed, st = this.struct()) {
+      const ids = new Set([seed]), queue = [seed], neighbors = new Map();
+      for (const [, bond] of st.bonds) {
+        for (const [a, b] of [[bond.begin, bond.end], [bond.end, bond.begin]]) {
+          if (!neighbors.has(a)) neighbors.set(a, []);
+          neighbors.get(a).push(b);
+        }
+      }
+      while (queue.length) for (const id of neighbors.get(queue.pop()) || []) if (!ids.has(id)) { ids.add(id); queue.push(id); }
+      return ids;
+    }
+
+    inheritFreshAtomScales(fresh) {
+      if (!fresh?.size || !this.visualScales.size) return;
+      const st = this.struct(), visited = new Set();
+      for (const uuid of fresh) {
+        const rid = this.uuidAtom.get(uuid);
+        if (rid === undefined || visited.has(rid)) continue;
+        const ids = this.componentAtomIds(rid, st);
+        for (const id of ids) visited.add(id);
+        // Only the newly added atoms inherit. Joining existing components must
+        // not overwrite either component's explicitly chosen paper size.
+        const seed = [...ids].find(id => !fresh.has(this.atomUuid.get(id)));
+        const factor = this.effectiveAtomScale(this.atomUuid.get(seed));
+        if (Math.abs(factor - 1) < 1e-9) continue;
+        for (const id of ids) {
+          const added = this.atomUuid.get(id);
+          if (!fresh.has(added)) continue;
+          this.setAtomVisualScale(added, factor);
+          const controller = MW.app?.documentController;
+          if (controller?.active) {
+            controller.state.atomScales ||= {};
+            controller.state.atomScales[added] = factor;
+          }
+        }
+      }
+    }
+
+    // Layout returns unit bonds. Restore each affected component's paper scale
+    // around that component's returned centre, before its undo snapshot is made.
+    scaleLayoutCoordinates(coords) {
+      const byId = new Map(coords.map(entry => [entry[0], entry])), seen = new Set(), out = new Map();
+      for (const [seed] of byId) {
+        if (seen.has(seed)) continue;
+        const ids = [...this.componentAtomIds(seed)].filter(id => byId.has(id));
+        ids.forEach(id => seen.add(id));
+        const factor = this.effectiveAtomScale(this.atomUuid.get(seed));
+        if (Math.abs(factor - 1) < 1e-9) continue;
+        const points = ids.map(id => byId.get(id)), xs = points.map(p => p[1]), ys = points.map(p => p[2]);
+        const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+        for (const [id, x, y] of points) out.set(id, [id, cx + (x - cx) * factor, cy + (y - cy) * factor]);
+      }
+      return coords.map(entry => out.get(entry[0]) || entry);
+    }
+
+    nativeComponentFactor(restruct, seed) {
+      if (restruct?.molecule !== this.struct() || !Number.isInteger(seed)) return 1;
+      const liveUuid = id => {
+        const uuid = this.atomUuid.get(id);
+        return uuid && this.uuidAtom.get(uuid) === id ? uuid : null;
+      };
+      const uuid = liveUuid(seed);
+      if (uuid) return this.effectiveAtomScale(uuid);
+      // A single native preview can add several atoms before its first render
+      // (chain / ring with a connecting bond). Find the existing anchor without
+      // assigning identities to the in-progress native action.
+      const known = [...this.componentAtomIds(seed)].find(id => liveUuid(id));
+      return this.effectiveAtomScale(liveUuid(known));
+    }
+
+    scaledNativePosition(restruct, seed, point, unitBond = false) {
+      const factor = this.nativeComponentFactor(restruct, seed), atom = restruct?.molecule?.atoms.get(seed);
+      if (!atom?.pp || !point || Math.abs(factor - 1) < 1e-9) return point;
+      const dx = point.x - atom.pp.x, dy = point.y - atom.pp.y, distance = Math.hypot(dx, dy);
+      const multiplier = unitBond ? (distance > 1e-9 ? factor / distance : 1) : factor;
+      const Vec = this.doc.defaultView.molstudioNativeStructOps.vec;
+      return new Vec(atom.pp.x + dx * multiplier, atom.pp.y + dy * multiplier);
+    }
+
+    syncVisualScalesFromDocument(documentState) {
+      this.visualScales.clear();
+      const scales = documentState && documentState.atomScales;
+      if (scales && typeof scales === 'object') {
+        for (const [uuid, factor] of Object.entries(scales)) {
+          if (M.finite(factor) && factor > 0 && Math.abs(factor - 1) >= 1e-9) this.visualScales.set(uuid, factor);
+        }
+      }
+      this.applyVisualScales();
+    }
+
+    composeScaleTransform(node, ax, ay, factor) {
+      // T(ax,ay) · S(f) · T(-ax,-ay) · existing（按 matrix 解析，非 matrix 变换跳过）
+      const attr = (node.getAttribute('transform') || '').trim();
+      const match = /^matrix\(\s*([^,\s]+)[,\s]+([^,\s]+)[,\s]+([^,\s]+)[,\s]+([^,\s]+)[,\s]+([^,\s]+)[,\s]+([^,\s]+)\s*\)$/i.exec(attr);
+      let a = 1, b = 0, c = 0, d = 1, e = 0, f = 0;
+      if (match) {
+        const v = match.slice(1).map(Number);
+        if (!v.every(Number.isFinite)) return false;
+        [a, b, c, d, e, f] = v;
+      }
+      const k = 1 - factor;
+      node.setAttribute('transform', `matrix(${factor * a},${factor * b},${factor * c},${factor * d},${ax * k + factor * e},${ay * k + factor * f})`);
+      return true;
+    }
+
+    applyVisualScales() {
+      const st = this.struct(), ctab = this.ed.render && this.ed.render.ctab;
+      if (!st || !ctab) return;
+      const off = this.offset(), bl = this.bondLength(), eps = 1e-9;
+      const atomFactor = rid => this.effectiveAtomScale(this.atomUuid.get(rid));
+      for (const [rid, atom] of st.atoms) {
+        const factor = atomFactor(rid), vis = ctab.atoms?.get(rid);
+        const ax = atom.pp ? atom.pp.x * bl + off.x : 0, ay = atom.pp ? atom.pp.y * bl + off.y : 0;
+        for (const path of vis?.visel?.paths || []) {
+          const node = path?.node;
+          if (!node || !node.isConnected || String(node.tagName).toLowerCase() !== 'text') continue;
+          const current = node.getAttribute('transform') || '';
+          let saved = this._visualTextNodes.get(node);
+          if (!saved || current !== saved.applied) saved = { base: current };
+          if (saved.factor === factor && saved.ax === ax && saved.ay === ay && current === saved.applied) continue;
+          if (saved.base) node.setAttribute('transform', saved.base); else node.removeAttribute('transform');
+          if (Math.abs(factor - 1) >= eps) this.composeScaleTransform(node, ax, ay, factor);
+          saved.applied = node.getAttribute('transform') || ''; saved.factor = factor; saved.ax = ax; saved.ay = ay;
+          this._visualTextNodes.set(node, saved);
+        }
+      }
+      for (const [rid, bond] of st.bonds) {
+        const fu = atomFactor(bond.begin), fv = atomFactor(bond.end), factor = Math.abs(fu - fv) < eps ? fu : 1;
+        const bvis = ctab.bonds?.get(rid);
+        for (const path of bvis?.visel?.paths || []) {
+          const node = path?.node;
+          if (!node || !node.isConnected) continue;
+          const current = node.getAttribute('stroke-width');
+          let saved = this._visualBondNodes.get(node);
+          if (!saved || current !== saved.applied) saved = { base: current };
+          const width = parseFloat(saved.base);
+          const next = Math.abs(factor - 1) < eps || !M.finite(width) ? saved.base : String(width * factor);
+          if (next === null) node.removeAttribute('stroke-width'); else if (next !== current) node.setAttribute('stroke-width', next);
+          saved.applied = next; this._visualBondNodes.set(node, saved);
+        }
+      }
+    }
+
     /* 供模型使用的解析上下文 */
     context(model) {
       const self = this;
@@ -555,7 +728,8 @@
           const z = self.zoom() || 1;
           const bl = self.bondLength() || 40;
           return 1 / (z * bl);
-        }
+        },
+        scaleOfAtom: (uuid) => self.effectiveAtomScale(uuid)
       };
     }
 
@@ -886,6 +1060,14 @@
       this.mounted = true;
       const win = this.doc.defaultView;
       const self = this;
+      const previousScaleHook = win.molstudioComponentScale;
+      const scaleHook = {
+        bondPosition: (restruct, seed, point) => self.scaledNativePosition(restruct, seed, point, true),
+        relativePosition: (restruct, seed, point) => self.scaledNativePosition(restruct, seed, point),
+        factor: (restruct, seed) => self.nativeComponentFactor(restruct, seed)
+      };
+      win.molstudioComponentScale = scaleHook;
+      this.disposers.push(() => { if (win.molstudioComponentScale === scaleHook) win.molstudioComponentScale = previousScaleHook; });
 
       // 1) Ketcher 的 change 事件（单参数 add(handler) 已在 p22 实测）
       try {
@@ -930,6 +1112,7 @@
           const self2 = this;
           this.ed.update = function () {
             const r = origUpdate.apply(this, arguments);
+            try { self2.applyVisualScales(); } catch (e) { if (root.console) console.warn('[adapter] 视觉缩放套用失败', e); }
             self2.schedule('struct');
             return r;
           };
@@ -945,7 +1128,11 @@
           const origRenderUpdate = R.update;
           const self2 = this;
           R.update = function () {
+            // Native tools create the real graph before rendering. Bind new atom
+            // identities and inherit its component's scale before drawing it.
+            self2.syncIdentity();
             const r = origRenderUpdate.apply(this, arguments);
+            try { self2.applyVisualScales(); } catch (e) { if (root.console) console.warn('[adapter] 视觉缩放套用失败', e); }
             self2.schedule('struct');
             return r;
           };
