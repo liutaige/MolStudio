@@ -22,10 +22,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Node dependencies
+      - name: Install Node dependencies and build agent bundle
         run: |
           npm --prefix fusion ci --ignore-scripts
           npm --prefix fusion/agent ci --ignore-scripts
+          npm --prefix fusion run build:agent
 
       - name: Run JavaScript unit and document tests
         run: npm --prefix fusion test
