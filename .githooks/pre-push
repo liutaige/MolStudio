@@ -26,7 +26,7 @@ for line in sys.stdin:
             p for p in paths
             if p and (
                 p.split('/', 1)[0] not in ALLOWED
-                or p in EXCLUDED_PATHS
+                or (commit == local_oid and p in EXCLUDED_PATHS)
             )
         ]
         if blocked:
