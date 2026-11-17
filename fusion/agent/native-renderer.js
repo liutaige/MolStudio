@@ -201,10 +201,10 @@
       // reset / clear display history: bump resetGeneration so late events of
       // old runs can never resurrect cleared content.
       this.resetGeneration += 1;
-      for (const runId of this.runMap.keys()) {
-        if (this.retiredRuns.size > 256) this.retiredRuns.clear();
-        this.retiredRuns.add(runId);
-      }
+      // FIFO cap: evicting only the oldest entries keeps the newest 256 fences
+      // alive; a blanket clear() would let late events revive ghost runs.
+      for (const runId of this.runMap.keys()) this.retiredRuns.add(runId);
+      while (this.retiredRuns.size > 256) this.retiredRuns.delete(this.retiredRuns.values().next().value);
       this.messages = [];
       this.runs = [];
       this.runMap.clear();

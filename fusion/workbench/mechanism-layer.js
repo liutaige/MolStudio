@@ -268,8 +268,9 @@
           }, g);
         }
 
-        // 端点失效/自由端点的提示（不属于成品，导出剔除）
-        if (bad) {
+        // 端点失效/自由端点的提示（不属于成品，导出剔除——导出重渲染传了
+        // targetGroup，文字绝不能写进副本之外的活 overlay，否则导出后残留）
+        if (bad && !forExport) {
           this.el('text', {
             x: geo.end.x + 6 * ui, y: geo.end.y - 6 * ui,
             'font-size': 9 * ui, fill: '#b45309', 'data-mech-ui': '1'

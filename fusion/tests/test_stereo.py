@@ -515,6 +515,40 @@ def test_layout_fault_tolerance_and_readable_valence_error():
               "第 1 个原子（N）显式价态超出允许上限" in skipped[0].get("error", ""))
 
 
+def test_analyze_and_group_buckets_match_smiles_path():
+    print("[19] KET 多组相对立体按标签分桶，与 SMILES 路径同值")
+    labels = ["C", "F", "Cl", "Br", "C", "F", "Cl", "Br"]
+    coords = [(0.0, 0.0), (1.2, 0.7), (1.2, -0.7), (-1.2, 0.7),
+              (3.6, 0.0), (4.8, 0.7), (4.8, -0.7), (2.4, 0.7)]
+    atoms = []
+    for i, (x, y) in enumerate(coords):
+        atom = {"label": labels[i], "location": [x, y, 0.0]}
+        if i == 0:
+            atom["stereoLabel"] = "&1"
+        elif i == 4:
+            atom["stereoLabel"] = "&2"
+        atoms.append(atom)
+    bonds = [
+        {"type": 1, "atoms": [0, 1], "stereo": 1}, {"type": 1, "atoms": [0, 2]},
+        {"type": 1, "atoms": [0, 3]}, {"type": 1, "atoms": [4, 5], "stereo": 1},
+        {"type": 1, "atoms": [4, 6]}, {"type": 1, "atoms": [4, 7]},
+    ]
+    sec = {"type": "molecule", "atoms": atoms, "bonds": bonds}
+    a_ket = stereo.analyze_mol(stereo.mol_from_section(sec), sec)
+    a_smiles = stereo.analyze_mol(stereo.parse_any("F[C@H](Cl)Br.F[C@H](Cl)Br |&1:1,&2:5|"))
+    check("KET 路径识别出 2 个 AND 组", a_ket["groups"]["and"] == 2, str(a_ket["groups"]))
+    check("SMILES 路径识别出 2 个 AND 组", a_smiles["groups"]["and"] == 2, str(a_smiles["groups"]))
+    check("两路径 groups 同值", a_ket["groups"] == a_smiles["groups"],
+          f"{a_ket['groups']} vs {a_smiles['groups']}")
+    check("KET groupAtoms 按组分桶", a_ket["groupAtoms"]["and"] == [[0], [4]], str(a_ket["groupAtoms"]))
+    check("SMILES groupAtoms 按组分桶", a_smiles["groupAtoms"]["and"] == [[1], [5]],
+          str(a_smiles["groupAtoms"]))
+    check("and_group 原因仍在", "and_group" in a_ket["reasons"], str(a_ket["reasons"]))
+    mol = stereo.mol_from_section(sec)
+    centers = Chem.FindMolChiralCenters(mol, useLegacyImplementation=False)
+    check("两个 & 组中心都是已指定构型", len(centers) == 2, str(centers))
+
+
 def main():
     test_parse()
     test_isomer_roundtrip()
@@ -535,6 +569,7 @@ def main():
     test_repeated_layout_is_stable()
     test_two_wedge_presentation()
     test_layout_fault_tolerance_and_readable_valence_error()
+    test_analyze_and_group_buckets_match_smiles_path()
     print()
     print(f"结果：{PASS} PASS / {FAIL} FAIL")
     if FAILED:

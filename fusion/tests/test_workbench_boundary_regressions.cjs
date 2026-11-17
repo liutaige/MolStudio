@@ -218,3 +218,79 @@ test('molwork round trips preserve lone-pair angles, fishhook geometry and six-p
     assert.equal(parsed.ok, true);
   }
 });
+
+test('lone-pair tool materializes ghost suggestion slots while atom clicks stay manual', () => {
+  const f = fixture();
+  const owner = f.adapter.uuidOfAtom(0), neighbour = f.adapter.uuidOfAtom(1);
+  const ghost = { id: 'ghost-test', ownerAtomId: owner, angle: 180,
+    refAtomId: neighbour, angleRel: 180, ghost: true };
+  f.controller.ghostSlots = [ghost];
+  f.controller.suppressedAuto = new Set(owner + '@180');   // 曾被用户删过的同槽位
+  const target = M.lonePairPosition(ghost, f.controller.ctx());
+  assert.ok(target, 'ghost slot must resolve to a position');
+  // 建议点位于原子 12px 宽容差之内 —— 这正是旧 atomsOnly 路径下幽灵永不可达的原因
+  assert.ok(M.dist(target, { x: 0, y: 0 }) < 12 * f.adapter.modelPerPixel());
+  assert.equal(f.controller.hitTest(target, { atomsOnly: true }).kind, 'atom');
+  const hit = f.controller.hitTest(target, { atomsOnly: true, allowGhost: true });
+  assert.ok(hit && hit.ghost === ghost, 'allowGhost must resolve the suggestion slot');
+  const ev = { preventDefault() {}, stopPropagation() {}, shiftKey: false };
+  f.controller.onLonePairDown(ev, target);
+  assert.equal(f.model.state.lonePairs.length, 1);
+  const lp = f.model.state.lonePairs[0];
+  assert.equal(lp.origin, 'auto');
+  assert.equal(lp.angle, 180);
+  assert.equal(lp.refAtomId, neighbour);
+  assert.equal(lp.angleRel, 180);
+  assert.equal(f.controller.suppressedAuto.has(owner + '@180'), false,
+    'materializing the suggestion clears its suppression key');
+  assert.deepEqual(f.controller.ghostSlots, [],
+    'the persisted suggestion must not keep a ghost twin (no double dot)');
+  assert.ok(f.controller.selection.has(lp.id));
+  // 点原子仍走原子分支：manual 起源、点击角度
+  const manual = f.controller.onLonePairDown(ev, { x: 0, y: -0.15 });
+  assert.equal(manual, undefined);
+  assert.equal(f.model.state.lonePairs.length, 2);
+  const manualLp = f.model.state.lonePairs[1];
+  assert.equal(manualLp.origin, 'manual');
+  assert.equal(Math.round(manualLp.angle), -90);
+  assert.equal(f.controller.hitTest(target, { atomsOnly: true, allowGhost: true }).ghost, undefined,
+    'after materialization the slot is a real lone pair, not a ghost');
+});
+
+test('select-all skips lone pairs whose owner atom is gone, same criterion as marquee', () => {
+  const f = fixture();
+  const calls = [];
+  f.adapter.ed.selection = value => { if (value !== undefined) calls.push(value); return { atoms: [], bonds: [] }; };
+  const arrow = M.makeArrow({ type: 'free', x: 0, y: 0 }, { type: 'free', x: 2, y: 0 }, {});
+  const live = M.makeLonePair(f.adapter.uuidOfAtom(0), { angle: 90 });
+  const orphan = M.makeLonePair('at-deleted', { angle: 90 });
+  f.model.addArrow(arrow);
+  f.model.addLonePair(live);
+  f.model.addLonePair(orphan);
+  const ctx = f.controller.ctx();
+  assert.equal(M.lonePairPosition(orphan, ctx), null, 'marquee criterion: position unresolvable');
+  assert.ok(M.lonePairPosition(live, ctx));
+  assert.equal(f.controller.selectAll(), true);
+  assert.deepEqual(calls, ['all']);
+  assert.equal(f.controller.selection.size, 2);
+  assert.ok(f.controller.selection.has(arrow.id));
+  assert.ok(f.controller.selection.has(live.id));
+  assert.equal(f.controller.selection.has(orphan.id), false);
+});
+
+test('arrow copy/paste round-trip preserves the visual scale field', () => {
+  const f = fixture();
+  f.adapter.ed.selection = () => ({ atoms: [], bonds: [] });
+  const arrow = M.makeArrow({ type: 'free', x: 0, y: 0 }, { type: 'free', x: 2, y: 0 },
+    { bend: 0.4, mode: 'manual', scale: 2.5 });
+  f.model.addArrow(arrow);
+  f.controller.selection = new Set([arrow.id]);
+  const payload = f.controller.buildCopyPayload();
+  assert.ok(payload && payload.arrows.length === 1, JSON.stringify(payload || {}));
+  assert.equal(payload.arrows[0].scale, 2.5, 'copy payload carries scale');
+  const pasted = f.controller.detachedArrows(payload, 1, 1);
+  assert.equal(pasted.length, 1);
+  assert.equal(pasted[0].scale, 2.5, 'paste must not reset a scaled arrow to 1x');
+  assert.equal(pasted[0].geometry.bend, 0.4);
+  assert.equal(pasted[0].geometry.mode, 'manual');
+});

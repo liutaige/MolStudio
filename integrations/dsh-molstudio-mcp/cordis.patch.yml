@@ -4,11 +4,11 @@
       config:
         serverName: molstudio
         transport: stdio
-        command: /Users/tiger/MolStudio/.venv-rdkit/bin/python
+        command: /path/to/MolStudio/.venv-rdkit/bin/python
         args:
           - '-B'
-          - /Users/tiger/MolStudio/fusion/mcp_server.py
-        cwd: /Users/tiger/MolStudio
+          - /path/to/MolStudio/fusion/mcp_server.py
+        cwd: /path/to/MolStudio
         startupTimeoutMs: 60000
         toolCallTimeoutMs: 180000
         failOnStartupError: false

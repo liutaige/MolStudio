@@ -787,7 +787,7 @@ print("---- R6 服务 stderr 诊断（R06）----")
 do {
     resetStatics()
     let p = Probe()
-    p.serverPython = "/Users/tiger/venvs/plain/bin/python"
+    p.serverPython = "/path/to/plain-venv/bin/python"
     p.serverStderrTail = """
     Traceback (most recent call last):
       File "server.py", line 20, in <module>
@@ -796,7 +796,7 @@ do {
     """
     let msg = p.serverFailureDiagnostics(reason: "本地化学服务进程在启动期间退出（退出码 1）。")
     check("R6a 诊断包含 RDKit", msg.contains("RDKit") && msg.contains("缺 RDKit"), "msg=\(msg.prefix(200))")
-    check("R6a 诊断包含解释器路径", msg.contains("/Users/tiger/venvs/plain/bin/python"))
+    check("R6a 诊断包含解释器路径", msg.contains("/path/to/plain-venv/bin/python"))
     check("R6a 诊断给出处置（pip install rdkit / 换解释器）",
           msg.contains("pip install rdkit") && msg.contains("换用含 RDKit 的解释器"))
     check("R6a 诊断包含原始 stderr", msg.contains("ModuleNotFoundError"))

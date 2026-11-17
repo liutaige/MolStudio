@@ -391,3 +391,49 @@ test('cancelling a text session restores staged formatting and draft text withou
   assert.deepEqual(f.c.object('obj-note'), original);
   assert.equal(f.history(), 0);
 });
+
+function imageFixture(f, id, assetId) {
+  f.c.state.assets[assetId] = { mime: 'image/png', data: 'aGVsbG8=' };
+  f.c.state.objects.push({ id, kind: 'image', band: 'back', x: 1, y: 1, w: 4, h: 3, rotation: 0, asset: assetId, crop: { x: 0, y: 0, w: 1, h: 1 } });
+  f.c.selection = new Set([id]);
+}
+
+test('cutting a document image prunes its orphan asset inside one complete undo pair', () => {
+  const f = fixture();
+  imageFixture(f, 'obj-img', 'asset-note');
+  assert.equal(f.c.cutFragment({ document: { objects: [{ id: 'obj-img' }] }, selectedMechanismIds: [] }), true);
+  assert.equal(f.c.object('obj-img'), undefined);
+  assert.equal(f.c.state.assets['asset-note'], undefined, 'cut no longer leaves an unreferenced asset behind');
+  assert.equal(f.history(), 1);
+  f.undo();
+  assert.ok(f.c.object('obj-img')); assert.equal(f.c.state.assets['asset-note'].data, 'aGVsbG8=');
+  f.redo();
+  assert.equal(f.c.object('obj-img'), undefined); assert.equal(f.c.state.assets['asset-note'], undefined);
+});
+
+test('referenced assets survive a cut and the native cut history pair includes the same cleanup', () => {
+  const f = fixture();
+  imageFixture(f, 'obj-img', 'asset-note');
+  // 同一资产仍被另一个对象引用时不能误删
+  f.c.state.objects.push({ id: 'obj-img2', kind: 'image', band: 'back', x: 6, y: 1, w: 4, h: 3, rotation: 0, asset: 'asset-note', crop: { x: 0, y: 0, w: 1, h: 1 } });
+  const action = { perform() { return { perform() { return {}; } }; } };
+  f.c.commitNativeCut(action, ['obj-img']);
+  assert.equal(f.c.object('obj-img'), undefined);
+  assert.equal(f.c.state.assets['asset-note'].data, 'aGVsbG8=', 'assets still referenced stay');
+  const undoAction = action.perform({});            // 撤销：恢复对象与资产
+  assert.ok(f.c.object('obj-img'));
+  undoAction.perform({});                           // 重做：再次删除，资产仍被 obj-img2 引用
+  assert.equal(f.c.object('obj-img'), undefined);
+  assert.equal(f.c.state.assets['asset-note'].data, 'aGVsbG8=');
+});
+
+test('native cut of the last image prunes its orphan asset inside the wrapped history pair', () => {
+  const f = fixture();
+  imageFixture(f, 'obj-img', 'asset-note');
+  const action = { perform() { return { perform() { return {}; } }; } };
+  f.c.commitNativeCut(action, ['obj-img']);
+  assert.equal(f.c.object('obj-img'), undefined);
+  assert.equal(f.c.state.assets['asset-note'], undefined, 'native cut prunes the orphan asset too');
+  action.perform({});
+  assert.ok(f.c.object('obj-img')); assert.equal(f.c.state.assets['asset-note'].data, 'aGVsbG8=');
+});

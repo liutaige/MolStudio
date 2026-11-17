@@ -284,6 +284,23 @@
 
   /* ---------- postMessage 协议（encode/decode 便于单测） ---------- */
 
+  // 宿主 → iframe 出站 targetOrigin：iframe 与宿主同源（src = serverBase + /threed.html），
+  // serverBase 为空表示同源，用当前页 location.origin；否则取 serverBase 的 origin。
+  // file:// 下 origin 是 opaque 的字符串 "null"，postMessage 无法用 "null" 作为
+  // targetOrigin（会抛错），只能保留 "*"。
+  function embedTargetOrigin(serverBase) {
+    const loc = root.location;
+    if (loc && loc.protocol === 'file:') return '*';
+    const base = typeof serverBase === 'string' ? serverBase.trim() : '';
+    if (base) {
+      try {
+        const origin = new URL(base).origin;
+        if (origin && origin !== 'null') return origin;
+      } catch (e) { /* 相对 base 视为同源 */ }
+    }
+    return loc ? loc.origin : '*'; // 无 location（如纯 Node 测试环境）时兜底，不误伤协议
+  }
+
   const EMBED_HOST_TYPE = 'k3d-embed';
   const EMBED_RESULT_TYPE = 'k3d-embed-result';
   const EMBED_ACTIONS = ['hello', 'show', 'style', 'reset', 'spin', 'snapshot', 'camera-get', 'camera-set', 'dispose'];
@@ -416,7 +433,7 @@
 
     __post(id, ok, extra) {
       const win = this.iframe && this.iframe.contentWindow;
-      if (win) win.postMessage(Object.assign({ type: EMBED_RESULT_TYPE, id, ok }, extra || {}), '*');
+      if (win) win.postMessage(Object.assign({ type: EMBED_RESULT_TYPE, id, ok }, extra || {}), embedTargetOrigin(this.serverBase));
     }
 
     __request(action, params, timeout) {
@@ -431,7 +448,7 @@
           reject(new Error(`embed ${action} 超时`));
         }, timeout || this.timeoutMs);
         this.__pending.set(id, { resolve, reject, timer });
-        this.iframe.contentWindow.postMessage(req, '*');
+        this.iframe.contentWindow.postMessage(req, embedTargetOrigin(this.serverBase));
       });
     }
 
@@ -484,7 +501,7 @@
       // 请求 iframe 内自行释放 WebGL 上下文（尽力而为），再移除节点
       try {
         if (this.iframe && this.iframe.contentWindow) {
-          this.iframe.contentWindow.postMessage(encodeRequest(0, 'dispose'), '*');
+          this.iframe.contentWindow.postMessage(encodeRequest(0, 'dispose'), embedTargetOrigin(this.serverBase));
         }
       } catch (e) { /* ignore */ }
       if (this.iframe && this.iframe.parentNode) this.iframe.parentNode.removeChild(this.iframe);

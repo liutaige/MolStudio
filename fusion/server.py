@@ -14,7 +14,7 @@ import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(BASE)                 # 开发态: /Users/tiger/MolStudio
+ROOT = os.path.dirname(BASE)                 # 开发态: 仓库根目录
 KETCHER_DIR = os.environ.get(
     "KETCHER_DIR",
     next((p for p in (os.path.join(ROOT, "ketcher-local"),
@@ -271,6 +271,17 @@ def clean2d(data: str):
 
 
 
+def _rad_prop_lines(rad):
+    """M  RAD 属性行（KET radical 原值）：与 stereo.molblock_from_section 同一布局，
+    count 占第 6–8 列，每条记录 8 列（%4d%4d），每行最多 8 条。"""
+    lines = []
+    for k in range(0, len(rad), 8):
+        chunk = rad[k:k + 8]
+        lines.append("M  RAD%3d" % len(chunk)
+                     + "".join("%4d%4d" % (i, v) for i, v in chunk))
+    return lines
+
+
 def ket_to_molblock(ket: str) -> str:
     """极简 KET(V2) → V2000 molblock（纯文本，不依赖 RDKit）。"""
     d = json.loads(ket)
@@ -296,6 +307,8 @@ def ket_to_molblock(ket: str) -> str:
     lines.append("%3d%3d  0  0  0  0  0  0  0  0999 V2000" % (n, m))
     chg = []
     iso = []
+    rad = []       # 自由基标记不再静默丢弃（P5）：KET radical 原值直接写 M  RAD
+    h_counts = {}  # implicitHCount 不再静默丢弃（P5）：{原子行索引: 氢数}
     for i, a in enumerate(atoms):
         x, y, z = (a.get("location") or [0, 0, 0])[:3]
         label = (a.get("label") or "C")[:3]
@@ -304,6 +317,18 @@ def ket_to_molblock(ket: str) -> str:
             chg.append((i + 1, int(a["charge"])))
         if a.get("isotope"):   # B07：只给有标记的原子写 M  ISO（绝对质量数、1-based 编号）
             iso.append((i + 1, int(a["isotope"])))
+        radical = int(a.get("radical") or 0)
+        if radical:
+            rad.append((i + 1, radical))
+        if "implicitHCount" in a:
+            raw = a.get("implicitHCount")
+            try:
+                n_h = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"KET 第 {i + 1} 个原子的氢数（implicitHCount）不是整数：{raw!r}")
+            if n_h < 0 or n_h > 16:
+                raise ValueError(f"KET 第 {i + 1} 个原子的氢数（implicitHCount）超出合理范围：{n_h}")
+            h_counts[i] = n_h
     for b in bonds:
         i1, i2 = b["atoms"]
         t = int(b.get("type", 1) or 1)
@@ -317,6 +342,7 @@ def ket_to_molblock(ket: str) -> str:
     for k in range(0, len(iso), 8):   # V2000 每行最多 8 条记录，超出分行
         chunk = iso[k:k + 8]
         lines.append("M  ISO%3d" % len(chunk) + "".join("%4d%4d" % (i, v) for i, v in chunk))
+    lines.extend(_rad_prop_lines(rad))
     lines.append("M  END")
     rough = "\n".join(lines) + "\n"
     # 列宽审计：手拼原子行是 68 列短行，RDKit 会把错位的域读进 map 域并设
@@ -328,8 +354,25 @@ def ket_to_molblock(ket: str) -> str:
             for a in mol.GetAtoms():
                 if a.HasProp("molAtomMapNumber") and a.GetAtomMapNum() == 0:
                     a.ClearProp("molAtomMapNumber")
+            # KET 声明的氢数沿用 stereo 的既有做法（SetNumExplicitHs + 关闭隐式推导）
+            # 写到 RDKit 原子上：无键原子由 RDKit 写进价域（V2000 文本里唯一可靠的
+            # 氢数载体）；有键原子的氢本来就由键与价态表达，文本层不再另行标注。
+            # 改完必须刷新属性缓存，否则写出的仍是解析时缓存的旧隐式氢数
+            # （曾把价域写成键数，回读后整分子氢数清零）。
+            if h_counts and mol.GetNumAtoms() == n:
+                for idx, n_h in h_counts.items():
+                    atom = mol.GetAtomWithIdx(idx)
+                    atom.SetNumExplicitHs(n_h)
+                    atom.SetNoImplicit(True)
+                    atom.UpdatePropertyCache(strict=False)
             out = Chem.MolToMolBlock(mol)
             if out.rstrip().endswith("M  END"):
+                if rad:
+                    # RDKit 会按自己的读数重写 M  RAD（无键自由基甚至会改码），
+                    # 先剔除它写的 RAD 行，再恢复为 KET 原值，保证往返不改变化学含义。
+                    body = [ln for ln in out.split("\n") if not ln.startswith("M  RAD")]
+                    end = body.index("M  END")
+                    out = "\n".join(body[:end] + _rad_prop_lines(rad) + body[end:])
                 return out
     except Exception:  # noqa: BLE001 解析失败退回手拼行
         pass
@@ -621,6 +664,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # 只允许同源 iframe 本服务页面；canvas.html/threed.html 的同源内嵌与
+        # 原生壳直接加载都不受影响。
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+        if code >= 400:
+            # 错误响应可能遗留未读取的请求体，关闭连接避免 HTTP/1.1 复用错位。
+            self.send_header("Connection", "close")
+            self.close_connection = True
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -687,14 +738,13 @@ class Handler(SimpleHTTPRequestHandler):
         if fn is None:
             return self._send(404, b"not found", "text/plain; charset=utf-8")
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(payload, dict):
-                raise ApiError("请求体必须是 JSON 对象", code="bad_request")
+            # 与 agent 网关同一套守卫：本机 Host 校验；缺失 Origin（非浏览器/原生
+            # 壳）放行，带跨源 Origin 的浏览器请求拒绝；请求体复用 read_json 的
+            # 4MB 上限，超出回 413，不再整读进内存。
+            agent_gateway.AgentGateway.check_origin(self)
+            payload = agent_gateway.AgentGateway.read_json(self)
             data = str(payload.get("smiles", "")) if path == "/api/agent/structure" else str(payload.get("data", ""))
             self._payload = payload
-            if path == "/api/agent/structure":
-                agent_gateway.AgentGateway.check_origin(self)
             # ket 请求可以不传 data；两者都没有才是空请求
             if not data.strip() and not payload.get("ket"):
                 raise ApiError("画布是空的", code="empty")
@@ -752,6 +802,15 @@ class Handler(SimpleHTTPRequestHandler):
                     if key in e.extra:
                         record[key] = e.extra[key]
                 results.append(record)
+            except ValueError as e:
+                # 转换层抛出的裸 ValueError（如 V3000 molblock）同样要结构化返回，
+                # 否则会穿成"外部桥接处理失败"的 500。
+                results.append({
+                    "id": item_id,
+                    "ok": False,
+                    "error": str(e)[:300],
+                    "code": "structure_failed",
+                })
         return {
             "ok": True,
             "isError": False,
@@ -813,6 +872,14 @@ class Handler(SimpleHTTPRequestHandler):
                 if atom.GetAtomMapNum():
                     extra["atomMap"] = atom.GetAtomMapNum()
                 raise ApiError("该自由基电子数无法用画布表示", code="unsupported_radical_state", extra=extra)
+        # 配位化合物（DATIVE 键）会强制 RDKit 写 V3000 molblock，画布的 KET 转换
+        # 只支持 V2000；必须在转换前给出可读拒绝，而不是裸 ValueError 穿成 500。
+        for bond in mol.GetBonds():
+            if bond.GetBondType() == Chem.BondType.DATIVE:
+                raise ApiError(
+                    "结构含配位键（配位化合物），画布暂不支持表示；"
+                    "请改用普通共价键并显式标注电荷",
+                    code="unsupported_dative_bond", extra={"field": "smiles"})
         refs = numbers if all(numbers) else list(range(1, mol.GetNumAtoms() + 1))
         from rdkit.Chem import rdDepictor
         if rdDepictor.IsCoordGenSupportAvailable():

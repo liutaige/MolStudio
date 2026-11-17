@@ -305,7 +305,8 @@ test('sanitizeClipboardFragment: 合法标签与样式保留，非法颜色/字�
     '<br><p><strong>段</strong></p></div>';
   const src = host.querySelector('#src');
   const out = rt.sanitizeClipboardFragment(src, doc, 2);
-  assert.strictEqual(out.text, '粗斜下subsup绿色丢弃\n段');
+  // BR 换行 + P 块边界，与 readEditorDom 的块语义一致（块边界不再丢失也不再翻倍叠加）
+  assert.strictEqual(out.text, '粗斜下subsup绿色丢弃\n\n段');
   const colors = out.runs.filter(r => r.color === 'green');
   assert.strictEqual(colors.length, 1);
   assert.strictEqual(colors[0].start, 9);
@@ -318,6 +319,28 @@ test('sanitizeClipboardFragment: 合法标签与样式保留，非法颜色/字�
   assert.ok(out.runs.some(r => r.sup === true));
   assert.ok(out.runs.some(r => r.italic === true));
   assert.ok(out.runs.some(r => r.underline === true));
+});
+
+// ---------- sanitizeClipboardFragment 块级换行（D3 回归） ----------
+test('sanitizeClipboardFragment: 块级标签保留换行，开头不补空行且连续边界折叠为一行', () => {
+  const host = doc.createElement('div');
+  host.innerHTML = '<div id="src"><p>Hello</p><p>World</p></div>';
+  const out = rt.sanitizeClipboardFragment(host.querySelector('#src'), doc, pxPerPt);
+  assert.strictEqual(out.text, 'Hello\nWorld');
+  assert.deepStrictEqual(out.runs, []);
+  // H1-H6/LI/BLOCKQUOTE/PRE 同样是块边界；连续边界（空 div、块结束+块开始）只折一行
+  host.innerHTML = '<div id="src"><h1>标题</h1><div><div></div></div>' +
+    '<ul><li>甲</li><li>乙</li></ul><blockquote>引用<p>内段</p></blockquote><pre>code</pre></div>';
+  const mixed = rt.sanitizeClipboardFragment(host.querySelector('#src'), doc, pxPerPt);
+  assert.strictEqual(mixed.text, '标题\n甲\n乙\n引用\n内段\ncode');
+  // 空块的 caret 占位 BR 与 readEditorDom 一样不重复计数：块序列间恰好一个空行
+  host.innerHTML = '<div id="src"><p>a</p><p><br></p><p>b</p></div>';
+  const blank = rt.sanitizeClipboardFragment(host.querySelector('#src'), doc, pxPerPt);
+  assert.strictEqual(blank.text, 'a\n\nb');
+  // 尾随块边界被丢弃，显式 BR 换行保留
+  host.innerHTML = '<div id="src">行<br>text<br></div>';
+  const br = rt.sanitizeClipboardFragment(host.querySelector('#src'), doc, pxPerPt);
+  assert.strictEqual(br.text, '行\ntext\n');
 });
 
 // ---------- 兼容辅助 ----------

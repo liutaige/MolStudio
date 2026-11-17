@@ -4,7 +4,7 @@ This bundle is configuration only. It inserts one `@deepseek-ai/dsh-mcp-client` 
 
 ## What it connects
 
-- Command: `/Users/tiger/MolStudio/.venv-rdkit/bin/python -B /Users/tiger/MolStudio/fusion/mcp_server.py`, working directory `/Users/tiger/MolStudio`.
+- Command: `/path/to/MolStudio/.venv-rdkit/bin/python -B /path/to/MolStudio/fusion/mcp_server.py`, working directory `/path/to/MolStudio` (replace `/path/to/MolStudio` with your clone path).
 - Tools appear as `mcp__molstudio__<tool>`: `molstudio_status`, `molstudio_read_canvas`, `molstudio_inspect_structures`, `molstudio_draw_operations`, `molstudio_plan_task`, `molstudio_complete_phase`, `molstudio_complete_layout`, and `molstudio_write_plan`.
 - Every committed batch becomes real editable Ketcher and mechanism-layer objects with undo, and the MolStudio AI panel shows a `外部协同 · <clientName>` badge with a per-operation change list.
 

@@ -6,8 +6,13 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED = {'.gitignore', '.githooks', 'AGENTS.md', 'README.md', 'fusion',
-           'fusion-native', 'integrations', 'ketcher-local', 'scripts', 'skills'}
+ALLOWED = {'.github', '.gitignore', '.githooks', 'AGENTS.md', 'LICENSE',
+           'README.md', 'THIRD_PARTY_NOTICES.md', 'fusion', 'fusion-native',
+           'integrations', 'ketcher-local', 'scripts', 'skills'}
+EXCLUDED_PATHS = {
+    'fusion/GEMINI_WELCOME_TASK.md',
+    'fusion-native/WELCOME_COMPONENT_HANDOFF.md',
+}
 
 
 def git(*args, env=None, data=None):
@@ -28,7 +33,13 @@ def main():
         raise SystemExit('main 已在其他工作树打开，请先结束该工作树的编辑。')
     previous = git('rev-parse', 'refs/heads/main').decode().strip()
     paths = git('ls-tree', '-r', '--name-only', '-z', 'HEAD').split(b'\0')
-    excluded = [p for p in paths if p and p.decode().split('/', 1)[0] not in ALLOWED]
+    excluded = [
+        p for p in paths
+        if p and (
+            p.decode().split('/', 1)[0] not in ALLOWED
+            or p.decode() in EXCLUDED_PATHS
+        )
+    ]
     with tempfile.TemporaryDirectory(prefix='molstudio-canvas-index-') as temp:
         env = {**os.environ, 'GIT_INDEX_FILE': str(Path(temp) / 'index')}
         git('read-tree', 'HEAD', env=env)

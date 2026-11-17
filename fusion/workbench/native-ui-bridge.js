@@ -38,12 +38,34 @@
     'bond.hashed': { type: 1, stereo: 6 },  // down (slashed)
     'bond.wavy': { type: 1, stereo: 4 }     // either
   };
-  /* RxnArrowMode enum, shipped bundle offset 1487963. Every value is a real
-   * editor.tool('reactionarrow', mode) argument; no web-toolbar fallback. */
+  /* RxnArrowMode enum, shipped bundle offset 1487963 (!function(U){U.OpenAngle=…}
+   * (dd||(dd={})), binding `dd` at offset 1488948). Full value list re-extracted
+   * from ketcher-local/static/js/main.e47c48ad.js on 2026-11-16 (18 values):
+   * open-angle, filled-triangle, filled-bow, dashed-open-angle, failed,
+   * retrosynthetic, both-ends-filled-triangle, equilibrium-filled-triangle,
+   * equilibrium-filled-half-bow, equilibrium-open-angle,
+   * unbalanced-equilibrium-filled-half-bow, unbalanced-equilibrium-open-half-angle,
+   * unbalanced-equilibrium-large-filled-half-bow,
+   * unbalanced-equilibrium-filled-half-triangle, elliptical-arc-arrow-filled-bow,
+   * elliptical-arc-arrow-filled-triangle, elliptical-arc-arrow-open-angle,
+   * elliptical-arc-arrow-open-half-angle.
+   * Every value is a real editor.tool('reactionarrow', mode) argument; no
+   * web-toolbar fallback. This build has no resonance mode at all (the string
+   * "resonance" never appears in the bundle), so resonanceArrow maps to
+   * both-ends-filled-triangle: the only straight double-headed style in the
+   * bundle (↔ shape — thin straight shaft, solid outward triangle heads at
+   * both ends; toolbar icon path tips at x=9.3 and x=38.7, verified in
+   * ketcher-local/static/js/main.e47c48ad.js on 2026-11-17). The open-ended
+   * straight double head both-ends-open-angle does NOT exist in this bundle;
+   * if a future build ships it, remap resonanceArrow to it. The
+   * elliptical-arc family is the curved style users complained about
+   * (共振箭头画成弯曲箭头, 2026-11-16); never fall back to it for
+   * resonanceArrow. Because each tool now has a distinct mode, the tool-watch
+   * state maps back to resonanceArrow via ARROW_MODES. */
   const ARROW_MODES = {
     'reactionArrow': 'open-angle',
     'equilibriumArrow': 'equilibrium-open-angle',
-    'resonanceArrow': 'elliptical-arc-arrow-open-angle',
+    'resonanceArrow': 'both-ends-filled-triangle',
     'retrosyntheticArrow': 'retrosynthetic'
   };
   const SHAPE_MODES = {

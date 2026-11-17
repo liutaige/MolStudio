@@ -22,7 +22,7 @@ fs.mkdirSync(out, { recursive: true });
 app.setPath('userData', profile);
 
 const BUILD = process.env.MOLSTUDIO_TEST_BUILD ||
-  '/Users/tiger/MolStudio/fusion-native/dist/MolStudio-Phase123-20261115.app (deliverable, Contents/Resources/canvas.html, port 49191)';
+  `${path.resolve(__dirname, '../../fusion-native/dist/MolStudio.app')} (deliverable, Contents/Resources/canvas.html, port ${port})`;
 
 const report = {
   application: 'MolStudio current canvas (deliverable build)',

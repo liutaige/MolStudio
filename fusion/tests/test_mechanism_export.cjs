@@ -3,7 +3,12 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 require('../workbench/mechanism-export.js');
+// MechanismLayer 依赖顺序：model / adapter（SVG_NS）先于 layer。
+require('../workbench/mechanism-model.js');
+require('../workbench/ketcher-adapter.js');
+require('../workbench/mechanism-layer.js');
 const exporter = globalThis.MolWorkbench.exporter;
+const layerNS = globalThis.MolWorkbench.adapter.SVG_NS;
 const I = () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
 const multiply = (a, b) => ({ a: a.a * b.a + a.c * b.b, b: a.b * b.a + a.d * b.b,
   c: a.a * b.c + a.c * b.d, d: a.b * b.c + a.d * b.d,
@@ -126,4 +131,44 @@ test('scrollbar marking reaches the SVG node even when Raphael ignores unknown c
   const draw = new Function('F', 'Q', 'B', 'R', 'V', 'var n;' + patch.after + ');');
   assert.equal(draw.call({ render: { paper: { rect: () => bar } }, COLOR: '#b2bbc3' }, 0, 0, 4, 100, 2), bar);
   assert.equal(attributes.get('data-molstudio-ui'), 'scrollbar');
+});
+
+test('export re-render of a broken arrow keeps the pending-rebind label out of the live overlay', () => {
+  // 与 test_mechanism_export.cjs 其余 Node 桩同风格的轻量 SVG 节点。
+  const makeEl = (tagName, parent) => {
+    const node = { tagName, attrs: {}, children: [], parentNode: parent || null, textContent: '' };
+    node.setAttribute = (k, v) => { node.attrs[k] = String(v); };
+    node.appendChild = child => { child.parentNode = node; node.children.push(child); return child; };
+    return node;
+  };
+  const layer = new globalThis.MolWorkbench.layer.MechanismLayer(
+    { zoom: () => 1, bondLength: () => 40 }, { createElementNS: (ns, tag) => makeEl(tag) });
+  layer.body = makeEl('g');
+  layer.overlay = makeEl('g');
+  const M = globalThis.MolWorkbench.model;
+  // 起点（类型 atom）绑定到已删除原子且无 last 坐标 → sourceOk=false → bad 提示
+  const model = { state: { lonePairs: [], arrows: [M.makeArrow(
+    { type: 'atom', atomId: 'at-gone' }, { type: 'free', x: 1, y: 0 }, { bend: 0, mode: 'manual' })] } };
+  const ctx = { atomPos: () => null };
+  const countText = (node, into) => {
+    if (node.tagName === 'text' && /待重绑/.test(node.textContent)) into++;
+    for (const child of node.children) into = countText(child, into);
+    return into;
+  };
+  const u = 1 / 40;
+  // 活画布渲染：警示文字属于 overlay 交互层
+  layer.renderArrows(model, ctx, u, new Set(), {}, null, u);
+  assert.equal(countText(layer.overlay, 0), 1, 'live canvas still shows the rebind hint');
+  // 导出重渲染（mechanism-export.buildSvg 传入 targetGroup）：
+  // 文字属于交互层（"不属于成品，导出剔除"），不得写进导出副本。
+  const exportGroup = makeEl('g');
+  layer.renderArrows(model, ctx, u, new Set(), {}, exportGroup, u);
+  assert.equal(countText(exportGroup, 0), 0, 'export copy must not contain the rebind label');
+  assert.equal(layer.overlay.children.length, 1,
+    'export render must not add a second (lingering) label to the live overlay');
+  // 复现用户报告的残留路径：导出前活 overlay 里还没有该提示（如刚打开文档），
+  // 旧代码会凭空写进活 overlay 且 exportImage 之后无人 render()，标签一直挂着。
+  layer.overlay.children.length = 0;
+  layer.renderArrows(model, ctx, u, new Set(), {}, exportGroup, u);
+  assert.equal(countText(layer.overlay, 0), 0, 'export must never write the label into the live overlay');
 });

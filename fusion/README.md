@@ -8,7 +8,7 @@
 
 ```sh
 uv venv --python 3.12.13 .venv-rdkit
-uv pip install --python .venv-rdkit/bin/python --only-binary :all: 'rdkit==2026.9.1' 'numpy==2.5.4' 'pillow==13.0.0'
+uv pip install --python .venv-rdkit/bin/python --only-binary :all: -r fusion/requirements.txt
 ```
 
 准备 Node 依赖及 AI 浏览器资源：

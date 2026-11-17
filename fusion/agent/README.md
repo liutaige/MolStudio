@@ -25,7 +25,7 @@
 打开助手的设置，填写：
 
 - 兼容 Chat Completions 的 API 地址。远程服务使用 HTTPS，本机反代可用 `http://127.0.0.1:端口/v1`。
-- 模型的准确名称。多行缩酮验收使用 WorkBuddy 的 `deepseek-v4.1-flash`。
+- 模型的准确名称（例如 `deepseek-v4.1-flash`、`gpt-5.2` 等）。
 - API Key。留空保存会保留原密钥。
 - 生成设置：选择服务默认参数，或按服务支持情况选择 DeepSeek / OpenAI 参数格式、思考强度与总输出上限。服务默认不发送思考开关或强度；总输出上限留空时也交由服务决定。此上限不是独立思考预算，也不承诺响应时间。不同服务和模型支持的档位可能不同。
 
@@ -201,8 +201,8 @@ MOLSTUDIO_PORT=49177 MOLSTUDIO_TEST_BUILD=/absolute/path/to/MolStudio.app \
 {
   "mcpServers": {
     "molstudio": {
-      "command": "/Users/tiger/MolStudio/.venv-rdkit/bin/python",
-      "args": ["-B", "/Users/tiger/MolStudio/fusion/mcp_server.py"]
+      "command": "/path/to/MolStudio/.venv-rdkit/bin/python",
+      "args": ["-B", "/path/to/MolStudio/fusion/mcp_server.py"]
     }
   }
 }

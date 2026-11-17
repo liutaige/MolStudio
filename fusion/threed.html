@@ -283,15 +283,23 @@ new ResizeObserver(() => {
     });
   }
 
+  // 出站 targetOrigin：锁定到本页 origin（iframe 与宿主同源）。file:// 下 origin 是 opaque 的
+  // 字符串 "null"，postMessage 无法用 "null" 作为 targetOrigin（会抛错），只能保留 "*"。
+  function embedTargetOrigin() {
+    if (window.location.protocol === 'file:') return '*';
+    return window.location.origin;
+  }
+
   const HANDLED = ["hello", "show", "style", "reset", "spin", "snapshot", "camera-get", "camera-set", "dispose"];
   function reply(id, ok, extra) {
     // 校验 source 为父窗口
     const target = (window.parent && window.parent !== window) ? window.parent : null;
     if (!target) return;
-    target.postMessage(Object.assign({ type: "k3d-embed-result", id, ok: !!ok }, extra || {}), "*");
+    target.postMessage(Object.assign({ type: "k3d-embed-result", id, ok: !!ok }, extra || {}), embedTargetOrigin());
   }
 
   window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin) return;  // 只接受同源宿主（file:// 双方 origin 均为 "null"，相等仍成立）
     if (event.source !== window.parent) return;  // 只接受父窗口
     const data = event.data;
     if (!data || typeof data !== "object" || data.type !== "k3d-embed") return;
@@ -354,13 +362,13 @@ new ResizeObserver(() => {
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       event.preventDefault();
-      window.parent.postMessage({ type: 'k3d-embed-cancel' }, '*');
+      window.parent.postMessage({ type: 'k3d-embed-cancel' }, embedTargetOrigin());
     }
   });
 
   // 加载完成后主动向宿主报 hello（宿主凭它触发 show）
   if (window.parent && window.parent !== window) {
-    window.parent.postMessage({ type: "k3d-embed", id: 0, action: "hello" }, "*");
+    window.parent.postMessage({ type: "k3d-embed", id: 0, action: "hello" }, embedTargetOrigin());
   }
 })();
 </script>

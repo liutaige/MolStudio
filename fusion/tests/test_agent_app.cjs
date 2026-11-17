@@ -161,3 +161,55 @@ test('handleExternalCommand auto-opens panel on modifying tools and SSE bridge p
   assert.equal(cancelledRes.isError, true);
   assert.equal(f.externalCalls.length, 2);
 });
+
+test('cancelled external request marks keep the newest 64 via FIFO eviction instead of a blanket clear', async t => {
+  const f = fixture(true, false); t.after(() => f.close());
+  await wait(0);
+  for (let i = 0; i < 70; i++) {
+    await f.window.molstudioAgent.handleExternalCommand({ type: 'cancel', requestId: `req-${i}` });
+  }
+  // 70 marks over the 64 cap: the oldest six are evicted, the rest stay fenced.
+  const evicted = await f.window.molstudioAgent.handleExternalCommand(
+    { type: 'tool_call', requestId: 'req-5', tool: 'read_canvas', args: {} });
+  assert.equal(evicted.isError, false, 'the evicted oldest mark no longer blocks a late tool call');
+  const retained = await f.window.molstudioAgent.handleExternalCommand(
+    { type: 'tool_call', requestId: 'req-6', tool: 'read_canvas', args: {} });
+  assert.equal(retained.isError, true, 'the newest 64 marks still cancel their late tool calls');
+  const newest = await f.window.molstudioAgent.handleExternalCommand(
+    { type: 'tool_call', requestId: 'req-69', tool: 'read_canvas', args: {} });
+  assert.equal(newest.isError, true);
+  assert.equal(f.externalCalls.length, 1, 'only the evicted request reached the runtime');
+});
+
+test('stopExternalBridge removes the five listeners startExternalBridge registered', async t => {
+  const watched = [];
+  let latestES;
+  const f = fixture(true, false, null, { setupWindow(win) {
+    win.EventSource = class {
+      constructor() { this.closed = false; latestES = this; }
+      addEventListener() { /* Bridge listeners on the source itself are dropped with it. */ }
+      close() { this.closed = true; }
+    };
+    const spy = (target, label) => {
+      for (const kind of ['addEventListener', 'removeEventListener']) {
+        const original = target[kind];
+        target[kind] = function (type, handler, ...rest) {
+          watched.push({ target: label, type, added: kind === 'addEventListener' });
+          return original.call(target, type, handler, ...rest);
+        };
+      }
+    };
+    spy(win, 'window');
+    spy(win.document, 'document');
+  } });
+  t.after(() => f.close());
+  await wait(0);
+  assert.ok(latestES, 'the external bridge started');
+  const types = ['focus', 'blur', 'visibilitychange', 'molstudio:agent-canvas-change', 'molstudio:agent-event'];
+  for (const type of types) assert.ok(watched.some(entry => entry.added && entry.type === type), `${type} registered`);
+  watched.length = 0;
+  f.window.dispatchEvent(new f.window.Event('beforeunload'));
+  await wait(0);
+  assert.equal(latestES.closed, true);
+  for (const type of types) assert.ok(watched.some(entry => !entry.added && entry.type === type), `${type} removed on stop`);
+});

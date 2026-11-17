@@ -608,6 +608,22 @@
       }
       if (best) return best;
 
+      // 2) 幽灵孤对：仅孤对工具（allowGhost）提前到「宽容差原子命中」之前解析。
+      //    建议点画在原子标签边缘外约 6~9px 处，若仍排在原子之后，会被原子
+      //    12px 的命中容差整个吞掉（materializeGhost 永不可达）。实心字形
+      //    （上方 5px/标签盒）已先行返回，「点原子」照旧走原子分支；其余调用
+      //    维持既有设计——幽灵仍排在原子/键之后兜底（不抢键的点击）。
+      let ghostHit = null;
+      if (o.allowGhost || !o.atomsOnly) {
+        for (const g of this.ghostSlots) {
+          const p = M.lonePairPosition(g, ctx);
+          if (!p) continue;
+          const d = M.dist(p, modelPt);
+          if (d <= lpTol && (!ghostHit || d < ghostHit.d)) ghostHit = { kind: 'lonePair', d: d, point: p, ghost: g, ownerAtomId: g.ownerAtomId };
+        }
+      }
+      if (o.allowGhost && ghostHit) return ghostHit;
+
       // 3) 原子（含自由基、复合标签）
       let atomBest = null;
       for (const [id, a] of st.atoms) {
@@ -651,16 +667,7 @@
       if (atomBest) return atomBest;
 
       // 5) 幽灵孤对（自动建议）：排在原子/键之后——建议标记不能把键的点击抢走
-      if (!o.atomsOnly) {
-        let ghostBest = null;
-        for (const g of this.ghostSlots) {
-          const p = M.lonePairPosition(g, ctx);
-          if (!p) continue;
-          const d = M.dist(p, modelPt);
-          if (d <= lpTol && (!ghostBest || d < ghostBest.d)) ghostBest = { kind: 'lonePair', d: d, point: p, ghost: g, ownerAtomId: g.ownerAtomId };
-        }
-        if (ghostBest) return ghostBest;
-      }
+      if (!o.atomsOnly && ghostHit) return ghostHit;
 
       // 6) 已有箭头（线条命中，范围比可见线宽宽）
       if (o.includeArrows) {
@@ -876,7 +883,9 @@
     }
 
     onLonePairDown(e, p) {
-      const hit = this.hitTest(p, { atomsOnly: true });
+      // allowGhost：孤对工具要能点到幽灵建议槽位（materializeGhost）；
+      // atomsOnly 保持工具语义不变（键/箭头不参与该工具的命中）。
+      const hit = this.hitTest(p, { atomsOnly: true, allowGhost: true });
       if (hit && hit.kind === 'implicitHydrogen') {
         e.preventDefault(); e.stopPropagation();
         this.status(this.implicitHydrogenHint());
@@ -1681,7 +1690,11 @@
       // 先取消尚未落下的临时预览，避免把预览分子当作已保存内容选中。
       if (typeof ed.tool === 'function') ed.tool('select');
       ed.selection('all');
-      this.selection = new Set(this.model.state.arrows.map(a => a.id).concat(this.model.state.lonePairs.map(l => l.id)));
+      // 与框选（finishMarquee/finishNativeMarquee）同一口径：
+      // 所属原子已删除、lonePairPosition 解析不出位置的孤对不进全选。
+      const ctx = this.ctx();
+      this.selection = new Set(this.model.state.arrows.map(a => a.id).concat(
+        this.model.state.lonePairs.filter(l => M.lonePairPosition(l, ctx)).map(l => l.id)));
       this.emitSelection();
       this.render();
       this.prepareClipboardReceiver('copy');
@@ -2150,7 +2163,8 @@
         const g = ar.geometry || {};
         return M.makeArrow(src, tgt, { electronCount: ar.electronCount, bend: g.bend,
           mode: g.mode === 'auto' ? 'auto' : 'manual', routeVersion: g.routeVersion || 0,
-          controlFrame: g.controlFrame, stepId: ar.stepId });
+          controlFrame: g.controlFrame, stepId: ar.stepId,
+          scale: ar.scale });   // 纸页缩放分子上的箭头粘贴后保持视觉缩放（一级持久化字段）
       });
     }
 

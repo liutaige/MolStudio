@@ -993,3 +993,20 @@ test('element.set returning null on selected atom keeps previous active tool, bu
   assert.equal(app.controller.tool, 'select');
   assert.equal(bridge.getState().tool.id, 'element.F');
 });
+
+test('resonanceArrow maps to the straight double-headed both-ends-filled-triangle, never a curved elliptical arc or a single-head mode', async () => {
+  const { deps, app } = makeDeps();
+  const bridge = new NativeUIBridge(deps);
+  await attachAll(bridge);
+  const reply = await bridge.dispatch({ protocol: 1, epoch: { ...bridge.epoch }, requestId: 'res-1', id: 'tool.set', args: { id: 'resonanceArrow' } });
+  assert.equal(reply.ok, true, JSON.stringify(reply.error || {}));
+  const calls = app.controller.adapter.ed.toolCalls;
+  // 共振箭头是直线双头 ↔（用户反馈 2026-11-17）：both-ends-filled-triangle 是本 bundle
+  // 唯一的直线双头样式；open-angle 是单头，不得回退。
+  assert.deepEqual(calls.at(-1), ['reactionarrow', 'both-ends-filled-triangle']);
+  // 共振箭头不得画成弯曲箭头（用户报告 2026-11-16）：映射值不得是椭圆弧族。
+  assert.ok(calls.every(([, mode]) => !String(mode).includes('elliptical')),
+    'no arrow tool may target the curved elliptical-arc family');
+  // 单头 open-angle 只留给 reactionArrow，不得再给 resonanceArrow 用。
+  assert.notEqual(calls.at(-1)[1], 'open-angle');
+});

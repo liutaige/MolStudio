@@ -573,11 +573,19 @@
     void doc;
     var px = finite(pxPerPt) && pxPerPt > 0 ? pxPerPt : 1;
     var pieces = [], text = '';
+    // 块级标签与 readEditorDom 的块语义对齐：块边界压换行；输出开头不补空行，连续边界只折一行。
+    var BLOCK_TAGS = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE'];
+    var pendingBreaks = 0, sawContent = false;
+    function flushBreak() {
+      if (pendingBreaks && sawContent) { pieces.push({ text: '\n', fmt: {} }); text += '\n'; }
+      pendingBreaks = 0;
+    }
     (function walk(node, fmt) {
       for (var child = node.firstChild; child; child = child.nextSibling) {
         if (child.nodeType === 3) {
           var t = child.nodeValue || '';
           if (!t) continue;
+          flushBreak(); sawContent = true;
           pieces.push({ text: t, fmt: fmt }); text += t;
         } else if (child.nodeType === 1) {
           var tag = (child.tagName || '').toUpperCase();
@@ -589,7 +597,14 @@
           else if (tag === 'U') next.underline = true;
           else if (tag === 'SUB') next.sub = true;
           else if (tag === 'SUP') next.sup = true;
-          else if (tag === 'BR') { pieces.push({ text: '\n', fmt: next }); text += '\n'; continue; }
+          else if (tag === 'BR') { flushBreak(); sawContent = true; pieces.push({ text: '\n', fmt: next }); text += '\n'; continue; }
+          else if (BLOCK_TAGS.indexOf(tag) !== -1) {
+            // Chromium keeps a sole BR in an empty block as its caret placeholder.
+            // The block boundary already supplies that line; do not count it twice.
+            if (editorPlaceholderBr(child)) { flushBreak(); sawContent = true; pieces.push({ text: '', fmt: next }); }
+            else { pendingBreaks = 1; walk(child, next); pendingBreaks = 1; }
+            continue;
+          }
           else if (tag === 'SPAN') {
             var st = child.style;
             if (st) {

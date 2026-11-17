@@ -427,11 +427,20 @@ def analyze_mol(mol, section=None) -> dict:
     groups = {"abs": 0, "and": 0, "or": 0}
     group_atoms = {"abs": [], "and": [], "or": []}
     if section is not None:
-        labels = stereo_labels(section)
-        for kind, idxs in labels.items():
-            if idxs:
-                groups[kind] = 1        # KET 里同一标签即同一组
-                group_atoms[kind] = list(idxs)
+        # KET 的 &1 / &2（or1 / or2）是不同的组：按标签字符串分桶，逐桶计数，
+        # 与 SMILES 路径 GetStereoGroups 的累加方式保持一致（此前一律并成 1 组）。
+        buckets = {}
+        for i, a in enumerate(section.get("atoms") or []):
+            label = a.get("stereoLabel")
+            if not label:
+                continue
+            label = str(label)
+            kind = _group_kind(label)
+            if kind in group_atoms:
+                buckets.setdefault(kind, {}).setdefault(label, []).append(i)
+        for kind, by_label in buckets.items():
+            groups[kind] = len(by_label)
+            group_atoms[kind] = list(by_label.values())
     else:
         for g in mol.GetStereoGroups():
             t = g.GetGroupType()
@@ -442,7 +451,7 @@ def analyze_mol(mol, section=None) -> dict:
             else:
                 kind = "or"
             groups[kind] += 1
-            group_atoms[kind].extend(a.GetIdx() for a in g.GetAtoms())
+            group_atoms[kind].append([a.GetIdx() for a in g.GetAtoms()])
 
     reasons = []
     if tetra["unspecified"]:

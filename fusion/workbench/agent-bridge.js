@@ -659,6 +659,26 @@
     function assertCommittedSource() {
       if (nativePasteInProgress()) fail('请先放置或取消正在预览的片段，再使用 AI 或读取画布。', 'edit_in_progress');
     }
+    /* 文本编辑会话跨越 agent 画布修改会让撤销栈撕裂：editText 打开时捕获的 before 快照
+     * 会在修改后被 finishTextEdit 提交。任何画布修改落地前必须先收尾开启中的编辑器
+     * （组合输入延迟收尾时取消草稿，绝不留到修改之后）。收尾造成的文档变化在这里同步
+     * 吸收进会话签名，避免被当成手动改动作废当前绘图运行。 */
+    function settleDocumentTextEdit() {
+      const dc = app.documentController;
+      if (!dc?.editor) return;
+      try { dc.finishTextEdit(); } catch (_) { /* 收尾失败已回滚到编辑前且编辑器已关闭 */ }
+      if (dc.editor) { try { dc.finishTextEdit(true); } catch (_) { /* 同上 */ } }
+      if (disposed || replacement || writeDepth || nativePasteInProgress()) return;
+      try {
+        const next = signatureNow();
+        if (next !== signature) {
+          if (signature !== null) revision++;
+          signature = next;
+          const run = currentRun && runs.get(currentRun);
+          if (run && run.state === 'active' && run.revision === revision - 1) run.revision = revision;
+        }
+      } catch (_) { /* 载入中可能暂无可用 Struct；随后的扫描会再次对齐 */ }
+    }
     function visibleModelBounds() {
       const win = doc.defaultView;
       const rect = ed.render.clientArea.getBoundingClientRect();
@@ -3654,6 +3674,7 @@
       for (const id of cascade.lonePairs) model.removeLonePair(id);
     }
     async function applyOperations(input, settings = {}) {
+      settleDocumentTextEdit();
       const ops = validateOperations(input), run = getRun(settings.runId, true);
       checkRun(run, settings.signal);
       const newAliases = ops.filter(op => op.type === 'molecule.add' && !run.applied.has(op.id)).map(op => op.id);
@@ -4519,6 +4540,7 @@
       root.setTimeout(() => group.remove(), 260);
     }
     async function previewOperations(input, settings = {}) {
+      settleDocumentTextEdit();
       const ops = validateOperations(input), run = getRun(settings.runId, true);
       scan(); checkRun(run);
       const pending = ops.filter(op => {

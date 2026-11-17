@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { JSDOM } = require('/Users/tiger/MolStudio/fusion/node_modules/jsdom');
+const { JSDOM } = require(path.resolve(__dirname, '../../../fusion/node_modules/jsdom'));
 
 const ROOT = path.resolve(__dirname, '../../..');
 const FIXTURE_DIR = path.join(__dirname, 'fixtures');

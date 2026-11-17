@@ -3,10 +3,12 @@
 // model requests, duplicated placement algorithm or production test hooks.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { JSDOM } = require('jsdom');
 require('../workbench/mechanism-model.js');
 require('../workbench/document-model.js');
 require('../workbench/workbench-storage.js');
 const { createBridge } = require('../workbench/agent-bridge.js');
+const { DocumentController } = require('../workbench/document-controller.js');
 const MW = globalThis.MolWorkbench;
 globalThis.k3dAPI = globalThis.k3dAPI || {};
 
@@ -15,6 +17,7 @@ function fixture(mode = 'paper') {
   const st = Object.fromEntries(pools.map(key => [key, new Map()]));
   const ctab = { molecule: st, texts: new Map(), atomsChanged: new Map(), bondsChanged: new Map() };
   let selection = { atoms: [], bonds: [] }, nextText = 0, zoom = 1, activePageIndex = 0;
+  const documentPairs = [];
   const ed = { historyStack: [], historyPtr: 0, struct: () => st,
     selection(value) { if (arguments.length) selection = value || {}; return selection; },
     render: { ctab, update() {}, setViewBox() {}, clientArea: { getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) } },
@@ -22,7 +25,8 @@ function fixture(mode = 'paper') {
   const adapter = { ed, k: { setMolecule() {} }, struct: () => st,
     doc: { defaultView: { innerWidth: 100, innerHeight: 100, molstudioClipboard: {} }, querySelector: () => null },
     onChange: () => () => {}, syncIdentity() {}, atomPos: () => null, atomIdOf: () => null,
-    bondIdOf: () => null, uuidOfAtom: () => null, uuidOfBond: () => null,
+    bondIdOf: () => null, uuidOfAtom: () => null, uuidOfBond: () => null, clearSelection: () => ed.selection(null),
+    pushAction(back, forward) { documentPairs.push({ back, forward }); },
     chemSnapshot: () => ({ atoms: [], bonds: [] }), selection: () => ({ atoms: selection.atoms || [], bonds: selection.bonds || [], others: 0 }),
     offset: () => ({ x: 0, y: 0 }), zoom: () => zoom, canvasSvg: () => null,
     clientToModel: p => ({ x: p.x, y: p.y }), activeAtoms: new Set(), activeBonds: new Set() };
@@ -30,6 +34,7 @@ function fixture(mode = 'paper') {
   const model = new MW.model.MechanismModel();
   const controller = { selection: new Set(), ctx: () => ({}), refreshAutoSlots() {}, emitSelection() {}, render() {}, onDirtyHint() {},
     wrapNativeHistory: action => action };
+  controller.model = model; // 真实 DocumentController 的快照/撤销依赖 mechanism.model
   const state = MW.documentModel.createDocument({ mode, pageCount: 2 });
   const documentController = { active: true, state, selection: new Set(), getActivePage: () => MW.documentModel.pageRects(state)[activePageIndex] };
   const app = { adapter, model, controller, documentController };
@@ -42,7 +47,7 @@ function fixture(mode = 'paper') {
       boundingBox: { x: text.position.x, y: text.position.y, width: 1, height: 1 }, content: text.content })) } }),
     createText(_ctab, text, point) { const id = nextText++; st.texts.set(id, { content: text, position: { x: point.x, y: point.y } }); return textAction(id, null); } };
   const bridge = createBridge(app, { native });
-  return { bridge, ed, st, controller, adapter, documentController, native, model,
+  return { bridge, ed, st, controller, adapter, documentController, app, native, model, documentPairs: () => documentPairs,
     paper: MW.documentModel.pageRects(state)[0].content,
     moveViewport: () => { zoom = .3; activePageIndex = 1; }, select: () => { selection = { atoms: [], bonds: [], texts: [0] }; documentController.selection.add('transient-selection'); } };
 }
@@ -146,4 +151,40 @@ test('paper curve checks use the painted quadratic extrema and reject a real exc
     assert.equal(JSON.stringify(f.model.state), before); assert.equal(f.ed.historyPtr, 1);
     assert.equal((await f.bridge.getContext()).revision, revision);
   } finally { f.bridge.dispose(); }
+});
+
+test('an open text-edit session is settled before AI writes and both undo steps stay independent', async () => {
+  const f = fixture(), dom = new JSDOM('<!doctype html><body></body>');
+  try {
+    const arrow = MW.model.makeArrow({ type: 'free', x: 10, y: 10 }, { type: 'free', x: 20, y: 10 }, { bend: 0, mode: 'manual' });
+    f.model.addArrow(arrow);
+    // 用真实 DocumentController 接管文档层：editText 打开时锁定“修改前”完整快照
+    const c = new DocumentController({ adapter: f.adapter, mechanism: f.controller,
+      win: { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) }, doc: dom.window.document,
+      iframe: { getBoundingClientRect: () => ({ left: 0, top: 0 }) }, onStatus() {} });
+    c.render = () => {}; c.positionEditor = () => {};
+    c.active = true; c.state = f.documentController.state;
+    f.documentController = c; f.app.documentController = c;
+    c.state.objects.push({ id: 'obj-note', kind: 'text', band: 'front', x: 5, y: 6, w: 10, h: 2, rotation: 0, rich: { text: 'note' } });
+    await f.bridge.beginRun('text-edit-tear');
+    assert.equal(c.editText('obj-note'), true);
+    c.editor.div.textContent = '更新后的笔记';
+    // AI 落地画布修改：入口必须先收尾编辑会话再执行修改，撤销栈才不会撕裂
+    await f.bridge.applyOperations([{ id: 'bend', type: 'arrow.modify', arrowId: arrow.id, bend: -1, mode: 'manual' }], { runId: 'text-edit-tear' });
+    assert.equal(c.editor, null, 'agent 入口先收尾文本编辑会话');
+    assert.equal(c.object('obj-note').rich.text, '更新后的笔记', '编辑草稿随收尾提交');
+    assert.equal(f.model.arrow(arrow.id).geometry.bend, -1, 'agent 修改照常落地');
+    // 编辑器已关闭：下一次 applyOperations 不再产生文字撤销对，也不重复提交
+    await f.bridge.applyOperations([{ id: 'bend2', type: 'arrow.modify', arrowId: arrow.id, bend: -.5, mode: 'manual' }], { runId: 'text-edit-tear' });
+    assert.equal(f.documentPairs().length, 1);
+    // 文字撤销对在 agent 修改之前捕获：撤销回到打开编辑器时的世界，重做也不吞掉 agent 的弯度改动
+    const pair = f.documentPairs()[0];
+    pair.back();
+    assert.equal(c.object('obj-note').rich.text, 'note');
+    assert.equal(f.model.arrow(arrow.id).geometry.bend, 0, '文字撤销回到打开编辑器时的机理');
+    pair.forward();
+    assert.equal(c.object('obj-note').rich.text, '更新后的笔记');
+    assert.equal(f.model.arrow(arrow.id).geometry.bend, 0, '文字重做不吞掉 agent 已落地的弯度改动');
+    assert.equal(f.ed.historyPtr, 2, 'agent 的两个原生步骤独立保留在历史栈中');
+  } finally { f.bridge.dispose(); dom.window.close(); }
 });

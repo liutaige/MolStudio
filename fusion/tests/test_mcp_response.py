@@ -1,11 +1,14 @@
 """MCP payload views preserve edit references and support bounded step reads."""
 from copy import deepcopy
+import contextlib
+import io
 import json
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import mcp_server
 from mcp_response import compact_response, select_canvas_steps
 
 
@@ -253,6 +256,101 @@ class StepScopeTests(unittest.TestCase):
         canvas["reactionSteps"][0]["reactants"].append("missing-atom")
         with self.assertRaisesRegex(ValueError, "missing-atom"):
             select_canvas_steps(canvas, ["rs-sn2"])
+
+
+class ServeStdioLoopTests(unittest.TestCase):
+    """一次坏调用不能杀死整个 stdio 服务进程（P2）。"""
+
+    def _serve(self, lines, handle_request=None, environ=None):
+        stdin = io.BytesIO(("\n".join(lines) + "\n").encode("utf-8"))
+        stdout = io.BytesIO()
+        original = mcp_server.MolStudioMCPServer.handle_request
+        if handle_request is not None:
+            mcp_server.MolStudioMCPServer.handle_request = handle_request
+        try:
+            mcp_server.serve_stdio(stdin=stdin, stdout=stdout, environ=environ or {})
+        finally:
+            mcp_server.MolStudioMCPServer.handle_request = original
+        return [json.loads(line) for line in stdout.getvalue().decode("utf-8").splitlines() if line.strip()]
+
+    def test_broken_tool_call_returns_internal_error_and_loop_continues(self):
+        real = mcp_server.MolStudioMCPServer.handle_request
+
+        def flaky(self, message):
+            if message.get("method") == "tools/call":
+                raise ValueError("MOLSTUDIO_MCP_TIMEOUT_MS=abc")
+            return real(self, message)
+
+        responses = self._serve(
+            [json.dumps({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                         "params": {"name": "molstudio_read_canvas"}}),
+             json.dumps({"jsonrpc": "2.0", "id": 8, "method": "ping"})],
+            handle_request=flaky)
+        self.assertEqual(len(responses), 2)
+        self.assertEqual(responses[0]["id"], 7)
+        self.assertEqual(responses[0]["error"]["code"], -32603)
+        self.assertIn("abc", responses[0]["error"]["message"])
+        self.assertEqual(responses[1], {"jsonrpc": "2.0", "id": 8, "result": {}})
+
+    def test_unserializable_response_falls_back_to_internal_error(self):
+        def bad_response(self, message):
+            return {"jsonrpc": "2.0", "id": message.get("id"), "result": {"object": object()}}
+
+        responses = self._serve(
+            [json.dumps({"jsonrpc": "2.0", "id": "abc", "method": "ping"})],
+            handle_request=bad_response)
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0]["id"], "abc")
+        self.assertEqual(responses[0]["error"]["code"], -32603)
+
+    def test_nonstandard_request_ids_are_answered_with_null(self):
+        real = mcp_server.MolStudioMCPServer.handle_request
+
+        def flaky(self, message):
+            if message.get("method") == "tools/call":
+                raise RuntimeError("boom")
+            return real(self, message)
+
+        responses = self._serve(
+            [json.dumps({"jsonrpc": "2.0", "id": [1], "method": "tools/call", "params": {}}),
+             json.dumps({"jsonrpc": "2.0", "id": True, "method": "tools/call", "params": {}}),
+             '{"jsonrpc": "2.0", "id": "x", "method": "tools/call", "params":',  # 坏 JSON 也活下来
+             json.dumps({"jsonrpc": "2.0", "id": 9, "method": "ping"})],
+            handle_request=flaky)
+        self.assertEqual([r.get("id") for r in responses], [None, None, None, 9])
+        self.assertEqual([r["error"]["code"] for r in responses[:2]], [-32603, -32603])
+        self.assertEqual(responses[2]["error"]["code"], -32700)  # 坏 JSON 走既有的解析错误分支
+
+    def test_failing_notification_stays_silent(self):
+        def always_raise(self, message):
+            raise RuntimeError("boom")
+
+        responses = self._serve(
+            [json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})],
+            handle_request=always_raise)
+        self.assertEqual(responses, [])
+
+
+class EnvNumberParsingTests(unittest.TestCase):
+    """非法数字环境变量回退默认并写一行警告，不让进程启动即死（P2）。"""
+
+    def test_invalid_values_fall_back_with_warning(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(mcp_server._env_number({}, "MOLSTUDIO_MCP_TIMEOUT_MS", 60000), 60000)
+            self.assertEqual(mcp_server._env_number({"MOLSTUDIO_MCP_TIMEOUT_MS": "abc"},
+                                                    "MOLSTUDIO_MCP_TIMEOUT_MS", 60000), 60000)
+            self.assertEqual(mcp_server._env_number({"MOLSTUDIO_MCP_TIMEOUT_MS": "12000"},
+                                                    "MOLSTUDIO_MCP_TIMEOUT_MS", 60000), 12000)
+            self.assertEqual(mcp_server._env_number({"MOLSTUDIO_MCP_TIMEOUT_MS": "0"},
+                                                    "MOLSTUDIO_MCP_TIMEOUT_MS", 60000, minimum=1), 60000)
+            self.assertEqual(mcp_server._env_number({"MOLSTUDIO_LAUNCH_WAIT_SECONDS": "abc"},
+                                                    "MOLSTUDIO_LAUNCH_WAIT_SECONDS", 8.0, cast=float), 8.0)
+            self.assertEqual(mcp_server._env_number({"MOLSTUDIO_LAUNCH_WAIT_SECONDS": "3"},
+                                                    "MOLSTUDIO_LAUNCH_WAIT_SECONDS", 8.0, cast=float), 3.0)
+        warnings = stderr.getvalue()
+        self.assertIn("MOLSTUDIO_MCP_TIMEOUT_MS", warnings)
+        self.assertIn("MOLSTUDIO_LAUNCH_WAIT_SECONDS", warnings)
 
 
 if __name__ == "__main__":

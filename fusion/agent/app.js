@@ -20,6 +20,7 @@
   let externalBridgeActive = false;
   let externalEventSource = null;
   let externalHeartbeatTimer = null;
+  let externalBridgeUnsubscribers = [];
   let activeExternalRequestId = null;
   let lastKnownSessionId = '';
 
@@ -227,8 +228,12 @@
     }
     if (command.type === 'cancel') {
       if (command.requestId) {
-        if (cancelledExternalRequests.size > 64) cancelledExternalRequests.clear();
+        // FIFO cap: the newest marks stay paired with late SSE tool calls;
+        // a blanket clear() would let cancelled requests revive and execute.
         cancelledExternalRequests.add(command.requestId);
+        while (cancelledExternalRequests.size > 64) {
+          cancelledExternalRequests.delete(cancelledExternalRequests.values().next().value);
+        }
       }
       if ((command.requestId && activeExternalRequestId === command.requestId) || (!command.requestId && runtime?._externalActive)) {
         runtime?.stop?.('external_cancel');
@@ -271,6 +276,10 @@
 
   function stopExternalBridge() {
     externalBridgeActive = false;
+    for (const remove of externalBridgeUnsubscribers) {
+      try { remove(); } catch { /* Ignore removal errors. */ }
+    }
+    externalBridgeUnsubscribers = [];
     if (externalHeartbeatTimer) {
       clearInterval(externalHeartbeatTimer);
       externalHeartbeatTimer = null;
@@ -321,11 +330,21 @@
       const type = event?.detail?.type;
       if (type === 'run_start' || type === 'run_end' || type === 'external_idle') postExternalStatus();
     };
-    root.addEventListener('focus', onStatusTrigger);
-    root.addEventListener('blur', onStatusTrigger);
-    document.addEventListener('visibilitychange', onStatusTrigger);
-    root.addEventListener('molstudio:agent-canvas-change', onCanvasChange);
-    root.addEventListener('molstudio:agent-event', onAgentEvent);
+    // Collect the unsubscribers so stopExternalBridge can detach every listener.
+    externalBridgeUnsubscribers = [
+      () => root.removeEventListener('focus', onStatusTrigger),
+      () => root.removeEventListener('blur', onStatusTrigger),
+      () => document.removeEventListener('visibilitychange', onStatusTrigger),
+      () => root.removeEventListener('molstudio:agent-canvas-change', onCanvasChange),
+      () => root.removeEventListener('molstudio:agent-event', onAgentEvent),
+    ];
+    for (const [target, type, handler] of [
+      [root, 'focus', onStatusTrigger],
+      [root, 'blur', onStatusTrigger],
+      [document, 'visibilitychange', onStatusTrigger],
+      [root, 'molstudio:agent-canvas-change', onCanvasChange],
+      [root, 'molstudio:agent-event', onAgentEvent],
+    ]) target.addEventListener(type, handler);
     externalHeartbeatTimer = setInterval(() => {
       if (panel?.disposed) { stopExternalBridge(); return; }
       postExternalStatus();

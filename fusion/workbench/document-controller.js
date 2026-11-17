@@ -944,8 +944,15 @@
       if (!fragment?.objects?.length) return null;
       const doc = MW.documentModel.createDocument(); doc.objects = clone(fragment.objects); doc.assets = clone(fragment.assets || {});
       this.validate(doc);
+      // 默认复用源资产 id：appendFragment 以 Object.assign 合并，同源粘贴天然幂等，不再逐次复制字节。
+      // 仅当目标文档已存在同 id 但内容不同的资产时，才回退到新 id 并重映射引用。
       const assets = {}, assetIds = new Map();
-      for (const [id, value] of Object.entries(doc.assets)) { const key = uid('asset'); assetIds.set(id, key); assets[key] = value; }
+      for (const [id, value] of Object.entries(doc.assets)) {
+        const existing = this.state.assets[id];
+        if (!existing || (existing.mime === value.mime && existing.data === value.data)) assetIds.set(id, id);
+        else assetIds.set(id, uid('asset'));
+        assets[assetIds.get(id)] = value;
+      }
       const objects = doc.objects.map(o => { const next = { ...o, id: uid('obj') }; delete next.pageId;
         if (next.asset) next.asset = assetIds.get(next.asset);
         if (next.previewAsset) next.previewAsset = assetIds.get(next.previewAsset); return next; });
@@ -1003,6 +1010,8 @@
       if (!ids?.length) return action;
       const before = { active: this.active, state: this.getState() };
       this.state.objects = this.state.objects.filter(o => !ids.includes(o.id));
+      // 清孤儿资产必须发生在 after 快照之前，撤销对才包含资产清理（对齐 deleteSelection）。
+      this.pruneUnreferencedAssets();
       const after = { active: this.active, state: this.getState() };
       this.wrapDocumentHistory(action, before, after); this.prune(); this.render(); this.emit(); this.onDirtyHint?.(); return action;
     }
@@ -1011,7 +1020,8 @@
       if (!ids.length) return false;
       const before = this.capture(); this.state.objects = this.state.objects.filter(o => !ids.includes(o.id));
       for (const id of mechIds) if (!this.mechanism.model.removeArrow(id)) this.mechanism.model.removeLonePair(id);
-      this.prune(); this.mechanism.pruneSelection(); return this.commit(before, '已剪切所选内容');
+      // 与 deleteSelection 相同：删除对象后、提交撤销对之前清孤儿资产，让撤销/重做各自完整。
+      this.pruneUnreferencedAssets(); this.prune(); this.mechanism.pruneSelection(); return this.commit(before, '已剪切所选内容');
     }
     setTool(tool) {
       this.finishTextEdit(); this.tool = tool; this.mechanism.setTool('select');

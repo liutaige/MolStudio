@@ -61,6 +61,24 @@ test('clear bumps resetGeneration and late events of cleared runs are dropped', 
   assert.equal(renderer.snapshot().runs[0].runId, 'r2');
 });
 
+test('retired run fences stay capped by FIFO eviction instead of a blanket clear', () => {
+  const { renderer } = make();
+  for (let i = 0; i < 300; i++) renderer.handleEvent({ type: 'run_start', runId: `run-${i}` });
+  renderer.clear();
+  assert.ok(renderer.retiredRuns.size <= 256, 'the retired fence set stays bounded');
+  assert.equal(renderer.retiredRuns.has('run-299'), true, 'the newest fence survives');
+  assert.equal(renderer.retiredRuns.has('run-44'), true, 'FIFO keeps the newest 256 fences instead of clearing all');
+  // Late events of retired runs must not resurrect cleared runs even after the cap engages.
+  renderer.handleEvent({ type: 'text_delta', runId: 'run-44', messageId: 'late', delta: '迟到' });
+  renderer.handleEvent({ type: 'tool_start', runId: 'run-299', toolCallId: 'late-tool', toolName: 'draw_operations' });
+  assert.equal(renderer.snapshot().messages.length, 0);
+  assert.equal(renderer.snapshot().runs.length, 0);
+  // A brand-new run after the capped reset still works normally.
+  renderer.handleEvent({ type: 'run_start', runId: 'run-new' });
+  assert.equal(renderer.snapshot().runs.length, 1);
+  assert.equal(renderer.snapshot().runs[0].runId, 'run-new');
+});
+
 test('tool_end failures expose compact public diagnostics only', () => {
   const { renderer, published } = make();
   renderer.handleEvent({ type: 'run_start', runId: 'r1' });

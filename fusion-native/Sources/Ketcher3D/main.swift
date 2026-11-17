@@ -1584,7 +1584,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
     @objc func actInsertImageIntoDocument() {
         guard pageUsable, !navigationInFlight else { return }
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg, .gif]
+        // 与下方 mime 分支及提示文案一致：PNG / JPEG / WebP / GIF（UTType.webP 需 macOS 11+，部署目标满足）。
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
@@ -2208,6 +2209,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
 
     /// Only successful opens/saves enter the recent-documents list.
     private func noteRecentDocument(_ url: URL) {
+        // 只读分发内容（打包态包内 Resources / 开发态源码树示例与夹具）不是用户文档：
+        // 不进最近列表，避免污染欢迎页并诱导 ⌘S 直接覆写分发文件（N1）。
+        guard !isReadOnlyExampleURL(url) else { return }
         let canonical = URL(fileURLWithPath: WelcomeRecents.canonicalPath(for: url))
         AppRuntimeConfig.shared.noteRecentURL(canonical)
         welcomeModel?.noteOpened(canonical)
@@ -2875,7 +2879,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             // 第一步：确定目标文件（未命名或另存为才弹面板）
             var url = s.fileURL
             let hasDocument = self.snapshotHasDocument(snapshot)
-            if forceSaveAs || url == nil || (hasDocument && url?.pathExtension.lowercased() != "molwork") {
+            // 只读分发内容（打包态包内 Resources / 开发态示例与夹具）禁止原位覆写：
+            // 一律等效 forceSaveAs 弹另存面板，成功写盘前不改旧文件身份（N1）。
+            // 与 isReadOnlyExampleURL 同款逻辑的内联展开（回归探针逐字提取本方法体，
+            // 只桩了 kServerPy/kIsBundled），两处须同步修改。
+            let dispatchedRoot = URL(fileURLWithPath: kServerPy).deletingLastPathComponent().standardizedFileURL.path
+            let targetPath = url?.standardizedFileURL.path
+            let protectedRoots: [String] = kIsBundled
+                ? [dispatchedRoot]
+                : [dispatchedRoot + "/examples", dispatchedRoot + "/tests/fixtures"]
+            let isReadOnlyExample = targetPath.map { path in
+                protectedRoots.contains { path == $0 || path.hasPrefix($0 + "/") }
+            } ?? false
+            if forceSaveAs || url == nil || isReadOnlyExample
+                || (hasDocument && url?.pathExtension.lowercased() != "molwork") {
                 let panel = NSSavePanel()
                 panel.directoryURL = self.docsDir
                 // 有机理内容默认给 .molwork（KET 装不下孤对与语义箭头）
@@ -3108,22 +3125,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
                     prompt.informativeText = warnings.prefix(10).joined(separator: "\n")
                     prompt.addButton(withTitle: "继续导出")
                     prompt.addButton(withTitle: "取消")
-                    guard prompt.runModal() == .alertFirstButtonReturn, stillValid() else {
-                        self.documentPDFExportInFlight = false; return
+                    guard prompt.runModal() == .alertFirstButtonReturn else {
+                        self.documentPDFExportInFlight = false; return   // 用户取消：静默
+                    }
+                    // 文档在等待期间已变化（N4）：不能无声取消，给一次明确提示。
+                    guard stillValid() else {
+                        self.documentPDFExportInFlight = false
+                        return self.alert("PDF 导出已取消",
+                                          "文档在导出过程中已变化（导航、关闭或重开），为保证内容正确，本次导出未写盘。")
                     }
                 }
                 let panel = NSSavePanel()
                 panel.nameFieldStringValue = (self.currentFile?.deletingPathExtension().lastPathComponent ?? "文档") + ".pdf"
                 panel.allowedContentTypes = [.pdf]
-                guard panel.runModal() == .OK, let url = panel.url, stillValid() else {
-                    self.documentPDFExportInFlight = false; return
+                guard panel.runModal() == .OK, let url = panel.url else {
+                    self.documentPDFExportInFlight = false; return   // 用户取消：静默
+                }
+                guard stillValid() else {
+                    self.documentPDFExportInFlight = false
+                    return self.alert("PDF 导出已取消",
+                                      "文档在导出过程中已变化（导航、关闭或重开），为保证内容正确，本次导出未写盘。")
                 }
                 let exporter = DocumentPDFExporter()
                 self.documentPDFExporter = exporter
                 exporter.export(pages: pages, isValid: stillValid) { [weak self] result in
                     guard let self else { return }
                     self.documentPDFExporter = nil; self.documentPDFExportInFlight = false
-                    guard stillValid() else { return }
+                    // 导出已完成但文档已变化（N4）：结果不再采用，但必须告知用户，不能无声丢弃。
+                    guard stillValid() else {
+                        return self.alert("PDF 导出已取消",
+                                          "文档在导出过程中已变化（导航、关闭或重开），本次导出结果未采用，未写盘。")
+                    }
                     switch result {
                     case .failure(let error): self.alert("PDF 导出失败", error.localizedDescription)
                     case .success(let data):
@@ -3176,7 +3208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
                 return self.alert("导出失败", "图片数据无法解码。")
             }
             do {
-                try bytes.write(to: url)
+                try bytes.write(to: url, options: .atomic)   // N3：原子写，避免半截图片文件
                 self.setStatus("已导出 \(url.lastPathComponent)（\(bytes.count) 字节）")
             } catch {
                 self.alert("导出失败", error.localizedDescription)
@@ -3209,8 +3241,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
             let panel = NSSavePanel()
             panel.nameFieldStringValue = "molecule.mol"
             if panel.runModal() == .OK, let url = panel.url {
-                try? m.write(to: url, atomically: true, encoding: .utf8)
-                self.setStatus("已导出 \(url.lastPathComponent)")
+                do {
+                    try m.write(to: url, atomically: true, encoding: .utf8)
+                    self.setStatus("已导出 \(url.lastPathComponent)")
+                } catch {
+                    // N2：写盘失败必须可见，不能吞错后假报成功。
+                    self.alert("导出失败", error.localizedDescription)
+                }
             }
         }
     }
@@ -4115,6 +4152,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate,
         // 开发态（非打包运行，kServerDir = fusion/）：直接读源码树里的同一份夹具
         let dev = kServerDir.appendingPathComponent("tests/fixtures/workbench-mechanism/F01.molwork")
         return fm.fileExists(atPath: dev.path) ? dev : nil
+    }
+
+    /// 只读分发内容判定（N1）：以 kServerPy 所在目录为分发内容根——
+    /// 打包态即应用包 Resources（覆写任一包内文件都会破坏代码签名）；
+    /// 开发态即源码树 fusion/，其中仅 examples/ 与 tests/fixtures/ 属分发内容。
+    /// 注意：saveSession 的方法体会被回归探针逐字提取（gen_probe.py 只桩了
+    /// kServerPy/kIsBundled），因此那边的判定是本逻辑的同款内联展开，两处须同步修改。
+    private func isReadOnlyExampleURL(_ url: URL) -> Bool {
+        let dispatchedRoot = URL(fileURLWithPath: kServerPy).deletingLastPathComponent().standardizedFileURL.path
+        let target = url.standardizedFileURL.path
+        let protectedRoots: [String] = kIsBundled
+            ? [dispatchedRoot]
+            : [dispatchedRoot + "/examples", dispatchedRoot + "/tests/fixtures"]
+        return protectedRoots.contains { target == $0 || target.hasPrefix($0 + "/") }
     }
 
     private func startAcceptanceObserverIfRequested() {

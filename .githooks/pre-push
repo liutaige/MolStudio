@@ -3,8 +3,13 @@
 import subprocess
 import sys
 
-ALLOWED = {'.gitignore', '.githooks', 'AGENTS.md', 'README.md', 'fusion',
-           'fusion-native', 'integrations', 'ketcher-local', 'scripts', 'skills'}
+ALLOWED = {'.github', '.gitignore', '.githooks', 'AGENTS.md', 'LICENSE',
+           'README.md', 'THIRD_PARTY_NOTICES.md', 'fusion', 'fusion-native',
+           'integrations', 'ketcher-local', 'scripts', 'skills'}
+EXCLUDED_PATHS = {
+    'fusion/GEMINI_WELCOME_TASK.md',
+    'fusion-native/WELCOME_COMPONENT_HANDOFF.md',
+}
 
 for line in sys.stdin:
     local_ref, local_oid, remote_ref, _ = line.split()
@@ -17,6 +22,12 @@ for line in sys.stdin:
         paths = subprocess.check_output(
             ['git', 'ls-tree', '-r', '--name-only', '-z', commit]
         ).decode().split('\0')
-        blocked = [p for p in paths if p and p.split('/', 1)[0] not in ALLOWED]
+        blocked = [
+            p for p in paths
+            if p and (
+                p.split('/', 1)[0] not in ALLOWED
+                or p in EXCLUDED_PATHS
+            )
+        ]
         if blocked:
             sys.exit('推送提交包含画布范围以外的文件：\n' + '\n'.join(blocked[:12]))

@@ -1671,7 +1671,11 @@ final class WorkspaceAgentStore {
     }
 
     private func intField(_ event: WorkspaceJSONObject, _ key: String) -> Int? {
-        guard let n = numberField(event, key), n.isFinite else { return nil }
+        // Int(Double) 对超出 Int64 表示范围的值会直接 trap（如 Int(1e300) 是 fatal error）。
+        // 这里的数值来自 agent 事件（attempt/delayMs/tokens 等），属于不可信输入：
+        // 先做范围防护再截断，超界/非有限值按字段缺失处理（调用方均有 ?? 回退或 if let）。
+        guard let n = numberField(event, key), n.isFinite,
+              n >= Double(Int.min), n < Double(Int.max) else { return nil }
         return Int(n)
     }
 
@@ -2705,10 +2709,22 @@ final class WorkspaceStateCoordinator {
         bridge.dispatch(command: command) { [weak self] result in
             guard let self else { return }
             self.inFlightMutationRequestIds.remove(requestId)
-            // Drop replies belonging to invalidated epochs
-            guard self.attachedEpoch == epoch else { return }
+            // Drop replies belonging to invalidated epochs. 但不能无声丢：completion 里
+            // 可能挂着唯一一次清理（如 agent.settings.save 的 defer 清明文 API key，
+            // 见 noteTransientSecret）。被丢弃时在这里补清，避免明文滞留
+            // lastTransientSecret（S2）。不向旧 epoch 回注合成错误——通用 dispatch 的
+            // completion（agent.send 等）会把失败显示到新文档界面上，噪声大于收益。
+            if self.attachedEpoch != epoch {
+                self.agentStore.clearTransientSecret()
+                return
+            }
             if case .success(let reply) = result {
-                if let replyEpoch = reply.epoch, replyEpoch != epoch { return }
+                // 回复携带了别的 epoch：协议异常且请求已消费、completion 必然被丢，同样补清。
+                if let replyEpoch = reply.epoch, replyEpoch != epoch {
+                    self.agentStore.clearTransientSecret()
+                    return
+                }
+                // requestId 不匹配：本请求的正确回复可能稍后仍会到达，不提前清理。
                 if reply.requestId != requestId { return }
             }
             completion?(result)

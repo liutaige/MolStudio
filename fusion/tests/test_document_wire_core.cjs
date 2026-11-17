@@ -189,11 +189,34 @@ test('addMolecule3D 写资产并选中；clipboardFragment 收集 previewAsset�
   const prepared = f.c.prepareFragment(fragment);
   const copy = prepared.objects[0];
   assert.notEqual(copy.id, id);
-  assert.notEqual(copy.previewAsset, o.previewAsset, 'previewAsset remapped');
+  // 目标文档已有同 id 且内容相同的资产：同源粘贴复用原 id，不再逐次复制字节（D2 回归）
+  assert.equal(copy.previewAsset, o.previewAsset, 'previewAsset reused when identical');
   assert.ok(prepared.assets[copy.previewAsset]);
   assert.equal(prepared.assets[copy.previewAsset].data, 'aGVsbG8=');
   // addImage 原有 asset 通道不受影响
   const img = f.c.state.objects; void img;
+});
+
+test('prepareFragment 复用源资产 id，仅同 id 不同内容时才换新并重映射', () => {
+  const f = fixture();
+  f.c.state.assets['asset-note'] = { mime: 'image/png', data: 'aGVsbG8=' };
+  f.c.state.assets['asset-conflict'] = { mime: 'image/jpeg', data: 'Zml4ZWQ=' };
+  const fragment = { objects: [
+    { id: 'obj-a', kind: 'image', band: 'back', x: 1, y: 1, w: 4, h: 3, rotation: 0, asset: 'asset-note', crop: { x: 0, y: 0, w: 1, h: 1 } },
+    { id: 'obj-b', kind: 'image', band: 'back', x: 6, y: 1, w: 4, h: 3, rotation: 0, asset: 'asset-conflict', crop: { x: 0, y: 0, w: 1, h: 1 } } ],
+    assets: { 'asset-note': { mime: 'image/png', data: 'aGVsbG8=' }, 'asset-conflict': { mime: 'image/png', data: 'aGVsbG8=' } } };
+  const prepared = f.c.prepareFragment(fragment);
+  assert.equal(prepared.objects[0].asset, 'asset-note', '同源粘贴复用原 id');
+  assert.notEqual(prepared.objects[1].asset, 'asset-conflict', '同 id 不同内容才回退新 id');
+  assert.equal(prepared.assets[prepared.objects[1].asset].data, 'aGVsbG8=');
+  // appendFragment 以 Object.assign 合并：重复粘贴同源片段不再复制字节
+  f.c.appendFragment(prepared);
+  const noteAsset = JSON.stringify(f.c.state.assets['asset-note']);
+  const again = f.c.prepareFragment(fragment);
+  f.c.appendFragment(again);
+  assert.equal(JSON.stringify(f.c.state.assets['asset-note']), noteAsset, 'repeated same-source paste keeps one copy');
+  assert.equal(f.c.state.assets['asset-note'].data, 'aGVsbG8=');
+  assert.equal(f.c.state.objects.filter(o => o.kind === 'image').length, 4);
 });
 
 test('finishMolecule3DInteraction 换预览图并删除无引用旧资产', () => {

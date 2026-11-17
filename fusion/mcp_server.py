@@ -30,6 +30,29 @@ DEFAULT_PORTS = (8462, 48975)
 DEFAULT_LAUNCH_WAIT_SECONDS = 8.0
 DEFAULT_CALL_TIMEOUT_MS = 60000
 
+
+def _warn_bad_env(name, raw, default):
+    sys.stderr.write(f"[molstudio-mcp] 环境变量 {name}={raw!r} 不是有效数字，回退默认值 {default}\n")
+    sys.stderr.flush()
+
+
+def _env_number(environ, name, default, cast=int, minimum=None):
+    """安全读取数字环境变量：缺失用默认；非法值回退默认并写一行 stderr 警告，
+    不让单个坏配置在调用里抛异常杀掉整个 stdio 进程。"""
+    raw = environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = cast(str(raw).strip())
+    except (TypeError, ValueError):
+        _warn_bad_env(name, raw, default)
+        return default
+    if minimum is not None and value < minimum:
+        _warn_bad_env(name, raw, default)
+        return default
+    return value
+
+
 INSTRUCTIONS = (
     "You are controlling a live MolStudio chemistry canvas via MCP tools.\n"
     "For a drawing request, use these tools directly. The result is editable in the existing MolStudio window; "
@@ -797,7 +820,9 @@ def _launch_dev_server(env, wait_limit):
 def launch_molstudio(existing_url=None, environ=None, wait_seconds=None):
     """Launch MolStudio.app or dev server + canvas.html and wait for SSE client registration."""
     env = os.environ if environ is None else environ
-    wait_limit = float(env.get("MOLSTUDIO_LAUNCH_WAIT_SECONDS") or wait_seconds or DEFAULT_LAUNCH_WAIT_SECONDS)
+    wait_limit = _env_number(env, "MOLSTUDIO_LAUNCH_WAIT_SECONDS",
+                             wait_seconds if wait_seconds else DEFAULT_LAUNCH_WAIT_SECONDS,
+                             cast=float)
     if existing_url:
         _open_canvas_url(existing_url)
         return _wait_for_canvas(env, wait_limit, only_url=existing_url)
@@ -910,7 +935,8 @@ class MolStudioMCPServer:
                 "isError": True,
             }
 
-        timeout_ms = int(self.environ.get("MOLSTUDIO_MCP_TIMEOUT_MS") or DEFAULT_CALL_TIMEOUT_MS)
+        timeout_ms = _env_number(self.environ, "MOLSTUDIO_MCP_TIMEOUT_MS",
+                                 DEFAULT_CALL_TIMEOUT_MS, minimum=1)
         payload = {
             "tool": stripped,
             "args": args,
@@ -1058,6 +1084,16 @@ def write_stdio_message(stream, message: dict, framing: str = "newline"):
     stream.flush()
 
 
+def _request_id(message):
+    """安全取 JSON-RPC 请求 id：缺失或非标准类型（bool/对象/数组）一律按 null 处理。"""
+    if not isinstance(message, dict):
+        return None
+    req_id = message.get("id")
+    if isinstance(req_id, bool) or not isinstance(req_id, (str, int, float)):
+        return None
+    return req_id
+
+
 def serve_stdio(stdin=None, stdout=None, environ=None):
     in_stream = stdin if stdin is not None else sys.stdin.buffer
     out_stream = stdout if stdout is not None else sys.stdout.buffer
@@ -1076,9 +1112,25 @@ def serve_stdio(stdin=None, stdout=None, environ=None):
             break
         if framing:
             server.framing = framing
-        response = server.handle_request(message)
+        # 一次坏调用（工具异常、参数解析、响应序列化失败）只回一条 -32603，
+        # 绝不能杀死整个 stdio 服务进程。
+        try:
+            response = server.handle_request(message)
+        except Exception as err:  # noqa: BLE001 单次调用失败不结束循环
+            if isinstance(message, dict) and "id" not in message:
+                continue  # 通知没有 id，出错也不回包
+            response = {"jsonrpc": "2.0", "id": _request_id(message),
+                        "error": {"code": -32603, "message": f"Internal error: {err}"}}
         if response is not None:
-            write_stdio_message(out_stream, response, server.framing)
+            try:
+                write_stdio_message(out_stream, response, server.framing)
+            except Exception as err:  # noqa: BLE001 响应写不出去 → 回退最小错误响应
+                write_stdio_message(
+                    out_stream,
+                    {"jsonrpc": "2.0", "id": _request_id(message),
+                     "error": {"code": -32603, "message": f"Internal error: {err}"}},
+                    server.framing,
+                )
 
 
 def main():

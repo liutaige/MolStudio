@@ -130,6 +130,40 @@ test('a review phase needs a real canvas read and repeated read-only loops pause
   assert.equal(h.state.checkpoint.phaseIndex, 0);
 });
 
+test('a single task looping on successful read-only calls pauses without unlimited requests', async () => {
+  const h = fixture([read()]);
+  const result = await h.runtime.run('只读核对当前画布');
+  assert.equal(result.status, 'needs_continue');
+  assert.equal(result.canContinue, true);
+  assert.equal(h.requests.length, 6, 'the shared no-progress fence bounds single-mode read-only loops too');
+  assert.equal(h.events.filter(event => event.type === 'run_end').at(-1)?.reason, 'no_progress');
+  assert.equal(h.state.checkpoint.pauseReason, 'no_progress');
+  assert.equal(h.mutations.length, 0);
+});
+
+test('a steering round starts a fresh no-progress window instead of counting against the previous one', async () => {
+  const encoder = new TextEncoder();
+  const truncatedDraw = () => {
+    const frames = [{ role: 'assistant', tool_calls: [{ index: 0, id: 'cut-draw', type: 'function',
+      function: { name: 'draw_operations', arguments: JSON.stringify({ operations: [molecule('cut')], finish: true }) } }] }, {}];
+    let i = 0;
+    return new Response(new ReadableStream({ pull(controller) {
+      if (i < frames.length) {
+        const index = i++;
+        controller.enqueue(encoder.encode('data: ' + JSON.stringify({ id: 'truncated', created: 0, model: config.model,
+          choices: [{ index: 0, delta: frames[index], finish_reason: index ? 'length' : null }] }) + '\n\n'));
+      } else if (i++ === frames.length) controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      else controller.close();
+    } }), { headers: { 'Content-Type': 'text/event-stream' } });
+  };
+  const h = fixture([() => truncatedDraw(), read()]);
+  const result = await h.runtime.run('画一个示例分子');
+  assert.equal(result.status, 'needs_continue');
+  assert.match(JSON.stringify(h.requests[1].messages), /上一条模型响应被服务截断/, 'the provider-length steer queued a new turn');
+  assert.equal(h.requests.length, 7, 'the steered round reset the counter, so six more read-only rounds follow before the pause');
+  assert.equal(h.events.filter(event => event.type === 'run_end').at(-1)?.reason, 'no_progress');
+});
+
 test('phase completion persistence is awaited before a new request can begin', async () => {
   let persistedNext = false;
   const h = fixture([plan(phases), draw('first-op'), (init) => {

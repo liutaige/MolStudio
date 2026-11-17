@@ -417,15 +417,17 @@ test('explicit canvas annotations are allowed', async () => {
   assert.equal(h.applied.length, 1);
 });
 
-test('long tasks ignore legacy output budgets while bounding redundant tool history', async () => {
-  const h = harness([...Array.from({ length: 96 }, (_, i) => tool('read_canvas', {}, 'read-' + i)),
-    [{ content: '研究完毕' }, {}]], { config: { maxTurns: 8, maxTokens: 1024 } });
+test('long tasks ignore legacy output budgets while bounding redundant tool history and read-only loops', async () => {
+  const h = harness([...Array.from({ length: 6 }, (_, i) => tool('read_canvas', {}, 'read-' + i)),
+    [{ content: '研究完毕' }, {}]], { config: { maxTurns: 3, maxTokens: 1024 } });
   const result = await h.runtime.run('持续研究当前结构');
-  assert.equal(h.requests.length, 97);
-  assert.equal(result.status, 'completed');
-  assert.equal(result.canContinue, false);
+  assert.equal(h.requests.length, 6, 'the shared no-progress fence ends the loop; the legacy maxTurns budget stays ignored');
+  assert.equal(result.status, 'needs_continue');
+  assert.equal(result.canContinue, true);
   assert.equal(h.requests.at(-1).messages.filter(message => message.role === 'tool').length, 2);
-  await h.runtime.run('还有一个问题');
+  const followUp = await h.runtime.run('还有一个问题');
+  assert.equal(followUp.status, 'completed');
+  assert.equal(followUp.canContinue, false);
   assert.equal(h.requests.at(-1).messages.filter(message => message.role === 'tool').length, 2);
   const users = h.requests.at(-1).messages.filter(message => message.role === 'user').map(message =>
     typeof message.content === 'string' ? message.content : message.content.map(part => part.text || '').join(''));

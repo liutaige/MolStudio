@@ -139,7 +139,7 @@ async function main() {
 
     // ---- reaction arrow variants: real structure mode ----
     for (const [id, mode] of [['equilibriumArrow', 'equilibrium-open-angle'],
-      ['resonanceArrow', 'elliptical-arc-arrow-open-angle'],
+      ['resonanceArrow', 'both-ends-filled-triangle'],
       ['retrosyntheticArrow', 'retrosynthetic']]) {
       const r = await dispatch('tool.set', { id });
       const placed = await js(`(() => {

@@ -41,8 +41,8 @@ Development repository:
 {
   "mcpServers": {
     "molstudio": {
-      "command": "/Users/tiger/MolStudio/.venv-rdkit/bin/python",
-      "args": ["-B", "/Users/tiger/MolStudio/fusion/mcp_server.py"]
+      "command": "/path/to/MolStudio/.venv-rdkit/bin/python",
+      "args": ["-B", "/path/to/MolStudio/fusion/mcp_server.py"]
     }
   }
 }

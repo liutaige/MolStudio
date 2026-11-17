@@ -642,7 +642,6 @@ kd.addEventListener('load', () => {
     const tid = btn.getAttribute('data-testid');
     if (tid === '3D Viewer button') {
       if (bridge()) notifyNative({ act: 'gen3d' });
-      else if (window.parent !== window) window.parent.postMessage({ type: 'k3d-gen3d' }, '*');
       return;
     }
     cleanLayoutFromUI();
