@@ -2,7 +2,7 @@
   "name": "molstudio-canvas",
   "private": true,
   "productName": "MolStudio",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "MolStudio 化学画布、原生应用构建与本地回归工具",
   "license": "Apache-2.0",
   "type": "commonjs",

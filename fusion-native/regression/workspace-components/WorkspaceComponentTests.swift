@@ -602,6 +602,58 @@ private func runAllTests() {
         window.close()
     }
 
+    runTest("AgentDuplicateTimelineKeysAndMovedCardConstraints") {
+        let bridge = MockNativeUIBridge()
+        let ep = WorkspaceEpoch(navigationGeneration: 0, pageId: "p-duplicate")
+        bridge.attachedEpoch = ep
+        bridge.initialState = makeReadyState(epoch: ep, revision: 1)
+        let coord = WorkspaceStateCoordinator(bridge: bridge)
+        let agentVC = WorkspaceAgentViewController(coordinator: coord)
+        _ = agentVC.view
+        var views: [String: NSView] = [:]
+        var renderCount = 0
+        agentVC.customRichMessageViewProvider = { message in
+            renderCount += 1
+            let view = NSView()
+            views[message.text] = view
+            return view
+        }
+        coord.attach(preparedSurfaces: WorkspaceSurface.allCases)
+        let first: [String: Any] = ["id": "duplicate", "role": "user", "text": "first"]
+        let second: [String: Any] = ["id": "duplicate", "role": "user", "text": "second"]
+        let other: [String: Any] = ["id": "other", "role": "user", "text": "other"]
+        func snapshot(_ messages: [[String: Any]], _ revision: Int) {
+            _ = coord.receiveRawScriptMessage([
+                "act": "nativeUI", "protocol": 1,
+                "epoch": ["navigationGeneration": ep.navigationGeneration, "pageId": ep.pageId],
+                "sequence": revision, "kind": "agent",
+                "payload": ["rendererRevision": revision, "resetGeneration": 0, "mode": "snapshot",
+                            "snapshot": ["messages": messages, "runs": [], "config": ["configured": true]]],
+            ])
+        }
+        snapshot([first, second, other], 1)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.06))
+        expectEqual(renderCount, 3, "Duplicate message IDs render both rows")
+        let originals = views
+        coord.notifyObservers()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.06))
+        expectEqual(renderCount, 3, "Duplicate IDs survive a later notification without rebuilding")
+        snapshot([other, first, second], 2)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.06))
+        expectEqual(renderCount, 3, "Reordering duplicate rows reuses each occurrence")
+        for name in ["other", "first", "second"] {
+            expect(views[name] === originals[name], "Reordering preserves \(name) view identity")
+            if let card = originals[name]?.superview, let stack = card.superview {
+                expect(stack.constraints.contains(where: { constraint in
+                    constraint.isActive && constraint.firstAttribute == .width &&
+                    (constraint.firstItem as? NSView) === card && (constraint.secondItem as? NSView) === stack
+                }), "Moved \(name) card retains an active width constraint")
+            } else {
+                expect(false, "Moved \(name) card remains attached")
+            }
+        }
+    }
+
     // 6. Agent presentation, hidden-channel exclusion, Markdown/LaTeX/\ce{} display, collapsible thinking & secret safety
     runTest("AgentEventsFormulasThinkingAndSecretRedaction") {
         let bridge = MockNativeUIBridge()
@@ -612,6 +664,11 @@ private func runAllTests() {
         let coord = WorkspaceStateCoordinator(bridge: bridge)
         let agentVC = WorkspaceAgentViewController(coordinator: coord)
         _ = agentVC.view
+        var renderedMessages: [String: Int] = [:]
+        agentVC.customRichMessageViewProvider = { message in
+            renderedMessages[message.text, default: 0] += 1
+            return nil
+        }
         coord.attach(preparedSurfaces: WorkspaceSurface.allCases)
 
         // Send initial public snapshot + ordered turn events + hidden channel message
@@ -735,6 +792,8 @@ private func runAllTests() {
             rev += 1
         }
 
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.06))
+
         // Hidden channel excluded
         let allTexts = coord.agentStore.timeline.flatMap { item -> [String] in
             switch item {
@@ -788,6 +847,40 @@ private func runAllTests() {
             generation: WorkspaceGenerationConfig(profile: "openai", effort: "high")
         )
         expect(!saveReq.description.contains("sk-my-transient-key-999"), "SaveRequest description redacts API key")
+
+        // Status/viewport notifications must not recreate historical message views.
+        let historicalRenderCount = renderedMessages[msgText, default: 0]
+        expect(historicalRenderCount > 0, "Historical message was rendered")
+        for _ in 0..<60 { coord.notifyObservers() }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.06))
+        expectEqual(renderedMessages[msgText, default: 0], historicalRenderCount,
+                    "Unchanged notifications reuse historical message views")
+
+        // A new streaming turn must not recreate the preceding turn either.
+        for event: [String: Any] in [
+            ["type": "run_start", "runId": "run-2"],
+            ["type": "thinking_delta", "runId": "run-2", "source": "model", "delta": "new thinking"],
+            ["type": "assistant_start", "runId": "run-2", "messageId": "m-2"],
+            ["type": "text_delta", "runId": "run-2", "messageId": "m-2", "delta": "stream"],
+            ["type": "text_delta", "runId": "run-2", "messageId": "m-2", "delta": "ed"],
+            ["type": "run_end", "runId": "run-2", "status": "completed", "reason": "completed"],
+        ] {
+            _ = coord.receiveRawScriptMessage([
+                "act": "nativeUI", "protocol": 1,
+                "epoch": ["navigationGeneration": ep.navigationGeneration, "pageId": ep.pageId],
+                "sequence": seq, "kind": "agent",
+                "payload": ["rendererRevision": rev, "resetGeneration": 0, "mode": "event", "event": event],
+            ])
+            seq += 1
+            rev += 1
+        }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.06))
+        expectEqual(renderedMessages[msgText, default: 0], historicalRenderCount,
+                    "Streaming a later turn reuses historical message views")
+        expectEqual(renderedMessages["streamed", default: 0], 1,
+                    "A burst of stream events renders the final text once")
+        expectEqual(renderedMessages["stream", default: 0], 0,
+                    "Intermediate stream text is coalesced")
 
         // Reset clears timeline without corrupting canvas state
         agentVC.resetButton.performClick(nil)

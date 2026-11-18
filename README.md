@@ -2,7 +2,7 @@
 
 **MolStudio** is a 2D chemical structure, reaction mechanism, and AI-assisted chemistry canvas combining an enhanced Ketcher editor, semantic electron-flow tools, RDKit stereochemistry / 3D conformer generation, paper-page layout with vector PDF export, a local MCP server, and a native macOS desktop shell.
 
-> **Beta Status / 当前状态**: `v0.4.0-beta.1` — Web/Python canvas and MCP server run locally; the native desktop shell (`fusion-native/`) requires macOS 14+ (Xcode/Swift). Current UI strings are primarily Simplified Chinese; paper mode currently supports Phase-1 mixed editing (adding pages and removing blank trailing pages; automatic height pagination and rich-text formulas/Markdown are not yet implemented).
+> **Beta Status / 当前状态**: `v0.4.1` — Web/Python canvas and MCP server run locally; the native desktop shell (`fusion-native/`) requires macOS 14+ (Xcode/Swift). Current UI strings are primarily Simplified Chinese; paper mode currently supports Phase-1 mixed editing (adding pages and removing blank trailing pages; automatic height pagination and rich-text formulas/Markdown are not yet implemented).
 
 ---
 

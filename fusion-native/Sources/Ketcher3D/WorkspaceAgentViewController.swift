@@ -972,6 +972,20 @@ final class WorkspaceAgentViewController: NSViewController {
 
     private var expandedThinkingRunIds = Set<String>()
     private var expandedDiagnosticIds = Set<String>()
+    private struct TimelineKey: Hashable {
+        let id: String
+        let occurrence: Int
+    }
+    private struct RenderedTimelineItem {
+        let key: TimelineKey
+        let item: WorkspaceAgentTimelineItem
+        let view: NSView
+        let widthConstraint: NSLayoutConstraint
+    }
+    private var renderedTimeline: [RenderedTimelineItem] = []
+    private var renderedEmptyReady: Bool?
+    private var invalidatedTimelineIds = Set<String>()
+    private var timelineRefreshScheduled = false
 
     let stopButton = NSButton(title: "停止", target: nil, action: nil)
     let continueButton = NSButton(title: "继续执行", target: nil, action: nil)
@@ -1283,7 +1297,7 @@ final class WorkspaceAgentViewController: NSViewController {
             )
         }
 
-        rebuildTimeline()
+        scheduleTimelineRefresh()
         updateComposerButtonsEnabled()
     }
 
@@ -1308,15 +1322,35 @@ final class WorkspaceAgentViewController: NSViewController {
         sendButton.isEnabled = ready && coordinator.isCommandSupported("agent.send") && !isRunning && hasText
     }
 
-    private func rebuildTimeline() {
-        timelineStack.arrangedSubviews.forEach {
-            timelineStack.removeArrangedSubview($0)
-            $0.removeFromSuperview()
+    private func scheduleTimelineRefresh() {
+        guard !timelineRefreshScheduled else { return }
+        timelineRefreshScheduled = true
+        // Stream chunks often arrive in bursts. Render the latest snapshot at
+        // most once per frame interval, including the final chunk of a burst.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 30.0) { [weak self] in
+            guard let self else { return }
+            self.timelineRefreshScheduled = false
+            self.rebuildTimeline()
         }
+    }
 
+    private func rebuildTimeline() {
         let items = coordinator.agentStore.timeline
+        if invalidatedTimelineIds.isEmpty,
+           items.count == renderedTimeline.count,
+           !items.isEmpty,
+           zip(items, renderedTimeline).allSatisfy({ pair in pair.0 == pair.1.item }) { return }
         if items.isEmpty {
-            let emptyLabel = NSTextField(labelWithString: coordinator.isAgentSurfaceReady()
+            let ready = coordinator.isAgentSurfaceReady()
+            guard !renderedTimeline.isEmpty || renderedEmptyReady != ready else { return }
+            timelineStack.arrangedSubviews.forEach {
+                timelineStack.removeArrangedSubview($0)
+                $0.removeFromSuperview()
+            }
+            renderedTimeline.removeAll()
+            invalidatedTimelineIds.removeAll()
+            renderedEmptyReady = ready
+            let emptyLabel = NSTextField(labelWithString: ready
                 ? "描述要绘制的分子或反应"
                 : "AI 助手正在准备就绪…")
             emptyLabel.font = .systemFont(ofSize: 12)
@@ -1327,17 +1361,65 @@ final class WorkspaceAgentViewController: NSViewController {
             return
         }
 
-        for entry in items {
-            let card: NSView
-            switch entry {
-            case .userMessage(let msg):
-                card = makeUserCard(message: msg)
-            case .runTurn(let run, let messages):
-                card = makeRunCard(run: run, messages: messages)
+        if renderedEmptyReady != nil {
+            timelineStack.arrangedSubviews.forEach {
+                timelineStack.removeArrangedSubview($0)
+                $0.removeFromSuperview()
             }
-            timelineStack.addArrangedSubview(card)
-            card.widthAnchor.constraint(equalTo: timelineStack.widthAnchor, constant: -20).isActive = true
+            renderedEmptyReady = nil
         }
+
+        // A notification can be unrelated to the conversation (for example a
+        // viewport change). Keep existing cards and their text views whenever
+        // the corresponding public timeline item has not changed.
+        var previous = Dictionary(uniqueKeysWithValues: renderedTimeline.map { ($0.key, $0) })
+        var occurrences: [String: Int] = [:]
+        var arranged = timelineStack.arrangedSubviews
+        var next: [RenderedTimelineItem] = []
+        for (index, entry) in items.enumerated() {
+            let occurrence = occurrences[entry.id, default: 0]
+            occurrences[entry.id] = occurrence + 1
+            let key = TimelineKey(id: entry.id, occurrence: occurrence)
+            let old = previous.removeValue(forKey: key)
+            let card: NSView
+            let widthConstraint: NSLayoutConstraint
+            if let old, old.item == entry, !invalidatedTimelineIds.contains(entry.id) {
+                card = old.view
+                widthConstraint = old.widthConstraint
+            } else {
+                if let old {
+                    old.widthConstraint.isActive = false
+                    timelineStack.removeArrangedSubview(old.view)
+                    old.view.removeFromSuperview()
+                    if let oldIndex = arranged.firstIndex(where: { $0 === old.view }) {
+                        arranged.remove(at: oldIndex)
+                    }
+                }
+                switch entry {
+                case .userMessage(let msg): card = makeUserCard(message: msg)
+                case .runTurn(let run, let messages): card = makeRunCard(run: run, messages: messages)
+                }
+                widthConstraint = card.widthAnchor.constraint(equalTo: timelineStack.widthAnchor, constant: -20)
+            }
+            if index >= arranged.count || arranged[index] !== card {
+                widthConstraint.isActive = false
+                if card.superview != nil {
+                    timelineStack.removeArrangedSubview(card)
+                    if let oldIndex = arranged.firstIndex(where: { $0 === card }) { arranged.remove(at: oldIndex) }
+                }
+                timelineStack.insertArrangedSubview(card, at: index)
+                arranged.insert(card, at: index)
+                widthConstraint.isActive = true
+            }
+            next.append(RenderedTimelineItem(key: key, item: entry, view: card, widthConstraint: widthConstraint))
+        }
+        for old in previous.values {
+            old.widthConstraint.isActive = false
+            timelineStack.removeArrangedSubview(old.view)
+            old.view.removeFromSuperview()
+        }
+        renderedTimeline = next
+        invalidatedTimelineIds.removeAll()
     }
 
     private func makeUserCard(message: WorkspacePublicMessage) -> NSView {
@@ -1558,6 +1640,7 @@ final class WorkspaceAgentViewController: NSViewController {
         } else {
             expandedThinkingRunIds.insert(runId)
         }
+        invalidatedTimelineIds.insert("run:\(runId)")
         rebuildTimeline()
     }
 
@@ -1567,6 +1650,11 @@ final class WorkspaceAgentViewController: NSViewController {
             expandedDiagnosticIds.remove(toolId)
         } else {
             expandedDiagnosticIds.insert(toolId)
+        }
+        for item in coordinator.agentStore.timeline {
+            if case .runTurn(let run, _) = item, run.tools.contains(where: { $0.id == toolId }) {
+                invalidatedTimelineIds.insert(item.id)
+            }
         }
         rebuildTimeline()
     }
